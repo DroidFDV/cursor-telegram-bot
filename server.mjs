@@ -2,7 +2,9 @@ import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 import { prepareDatabase } from "./src/db.mjs";
 import { insertMessage } from "./src/messages.mjs";
+import { originFromEnv, originFromForwarded } from "./src/origin.mjs";
 import { toRecord } from "./src/record.mjs";
+import { ensureRegistered } from "./src/register.mjs";
 import { botToken, responseLeaksSecret, webhookAuthorized, webhookSecret } from "./src/secret.mjs";
 
 const BODY_LIMIT = 1_048_576;
@@ -66,7 +68,16 @@ function sendJson(res, status, body) {
   res.end(payload);
 }
 
+function noteRequest(req) {
+  const origin = originFromEnv() ?? originFromForwarded(req.headers);
+  if (!origin) return;
+  ensureRegistered(origin).catch(() => {
+    console.error("webhook registration failed");
+  });
+}
+
 export async function handle(req, res) {
+  noteRequest(req);
   const path = pathname(req);
   if (req.method === "GET" && path === "/health") {
     sendJson(res, 200, { ok: true });
@@ -152,6 +163,12 @@ export async function start(options = {}) {
     server.listen(port, host, resolve);
   });
   console.error(`listening on ${host}:${port}`);
+  const origin = originFromEnv();
+  if (origin) {
+    ensureRegistered(origin).catch(() => {
+      console.error("webhook registration failed");
+    });
+  }
   return server;
 }
 

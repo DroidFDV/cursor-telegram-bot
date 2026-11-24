@@ -1,6 +1,6 @@
 # cursor-telegram-bot
 
-Node HTTP app that receives Telegram webhook updates and stores group messages. Telegram POSTs to this process. This app does not call Telegram.
+Node HTTP app that receives Telegram webhook updates and stores group messages. Telegram POSTs to this process. When the bot token, the webhook secret, and the public HTTPS origin are all present, the process registers that webhook with Telegram.
 
 ## Routes
 
@@ -22,6 +22,7 @@ Set these on the published host. This repository does not contain their values, 
 | `DATABASE_URL` | Postgres connection set by the app host for the database declared in `cursor-app.json`. Do not commit it. |
 | `DATABASE_URL_UNPOOLED` | Optional direct Postgres URL the host may set. Migrations use it when it is present. |
 | `PORT` | Listen port. The host sets this. Default is `3000`. The process listens on `0.0.0.0`. |
+| `CURSOR_APP_URL` | Public HTTPS origin, if the host sets it. Example shape: `https://your-host.example`. The process does not assume a host. |
 
 ## Storage
 
@@ -39,7 +40,9 @@ History from before the bot joined the group is unavailable. Telegram only deliv
 
 ## Webhook registration
 
-Register the webhook with Telegram after the app is published. Point it at the published HTTPS origin plus `/telegram`, and set Telegram's secret token to the same value as `TELEGRAM_WEBHOOK_SECRET`. Do that from the host environment. Do not put tokens in this repository, and do not register the webhook from a checkout that has no host URL yet.
+On boot, if `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, and `CURSOR_APP_URL` are set, the process registers `POST /telegram` with Telegram and sends the webhook secret as Telegram's secret token. The public URL is not hardcoded. Nothing in that call is written to the log.
+
+This host does not provide the public origin, so `CURSOR_APP_URL` stays unset here. Registration then waits for the first request whose `x-forwarded-proto` is `https` and whose `x-forwarded-host` is a single public host. That pair is the trusted forwarded host.
 
 Telegram's servers must be able to reach `POST /telegram` without a Cursor sign-in, so the published app needs public access. No route returns stored messages.
 

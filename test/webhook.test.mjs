@@ -12,6 +12,7 @@ process.env.TELEGRAM_WEBHOOK_SECRET = WEBHOOK_SECRET;
 process.env.TELEGRAM_BOT_TOKEN = BOT_TOKEN;
 delete process.env.DATABASE_URL;
 delete process.env.DATABASE_URL_UNPOOLED;
+delete process.env.CURSOR_APP_URL;
 
 let server;
 let base;
