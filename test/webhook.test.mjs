@@ -7,9 +7,11 @@ import app, { readBody, start } from "../server.mjs";
 
 const WEBHOOK_SECRET = "test-webhook-secret-value";
 const BOT_TOKEN = "test-bot-token-value";
+const INBOX_KEY = "test-inbox-read-key-value";
 
 process.env.TELEGRAM_WEBHOOK_SECRET = WEBHOOK_SECRET;
 process.env.TELEGRAM_BOT_TOKEN = BOT_TOKEN;
+process.env.INBOX_READ_KEY = INBOX_KEY;
 delete process.env.DATABASE_URL;
 delete process.env.DATABASE_URL_UNPOOLED;
 delete process.env.CURSOR_APP_URL;
@@ -177,6 +179,22 @@ describe("telegram webhook", { timeout: 60_000, concurrency: 1 }, () => {
     assert.equal(healthText.includes("ada"), false);
     assert.equal(healthText.includes("Project Brozzers"), false);
     assert.equal(healthText.includes("-1001234567890"), false);
+
+    const denied = await fetch(`${base}/inbox`);
+    assert.equal(denied.status, 404);
+    const wrong = await fetch(`${base}/inbox`, { headers: { "x-inbox-key": "wrong-inbox-read-key" } });
+    assert.equal(wrong.status, 404);
+    const inbox = await fetch(`${base}/inbox?after=10`, { headers: { "x-inbox-key": INBOX_KEY } });
+    const inboxText = await inbox.text();
+    const inboxBody = JSON.parse(inboxText);
+    assert.equal(inbox.status, 200);
+    assert.equal(inboxBody.messages.length >= 1, true);
+    assert.equal(inboxBody.messages.some((item) => item.text === "look"), true);
+    assert.equal(inboxBody.messages.every((item) => item.chatId === undefined), true);
+    assert.equal(inboxText.includes("-1001234567890"), false);
+    assert.equal(inboxText.includes(INBOX_KEY), false);
+    assert.equal(inboxText.includes(WEBHOOK_SECRET), false);
+    assert.equal(inboxText.includes(BOT_TOKEN), false);
 
     const dumped = JSON.stringify(rows);
     assert.equal(dumped.includes("file-secret-id"), false);

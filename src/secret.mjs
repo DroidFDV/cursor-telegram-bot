@@ -12,6 +12,21 @@ export function webhookSecret() {
   return typeof value === "string" ? value.trim() : "";
 }
 
+export function inboxReadKey() {
+  const value = process.env.INBOX_READ_KEY;
+  return typeof value === "string" ? value.trim() : "";
+}
+
+export function inboxAuthorized(header) {
+  const expected = inboxReadKey();
+  if (expected.length === 0 || typeof header !== "string" || header.length === 0) {
+    return false;
+  }
+  const actualHash = createHash("sha256").update(header).digest();
+  const expectedHash = createHash("sha256").update(expected).digest();
+  return timingSafeEqual(actualHash, expectedHash);
+}
+
 export function webhookAuthorized(header) {
   const expected = webhookSecret();
   if (expected.length === 0 || typeof header !== "string" || header.length === 0) {
@@ -25,7 +40,9 @@ export function webhookAuthorized(header) {
 export function responseLeaksSecret(payload) {
   const token = botToken();
   const secret = webhookSecret();
+  const inboxKey = inboxReadKey();
   if (token.length >= 8 && payload.includes(token)) return true;
   if (secret.length >= 8 && payload.includes(secret)) return true;
+  if (inboxKey.length >= 8 && payload.includes(inboxKey)) return true;
   return false;
 }

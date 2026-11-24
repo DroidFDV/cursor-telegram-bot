@@ -1,10 +1,10 @@
 import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 import { prepareDatabase } from "./src/db.mjs";
-import { insertMessage, messageStats } from "./src/messages.mjs";
+import { insertMessage, listMessages, messageStats } from "./src/messages.mjs";
 import { toRecord } from "./src/record.mjs";
 import { ensureRegistered, webhookStatus } from "./src/register.mjs";
-import { botToken, responseLeaksSecret, webhookAuthorized, webhookSecret } from "./src/secret.mjs";
+import { botToken, inboxAuthorized, responseLeaksSecret, webhookAuthorized, webhookSecret } from "./src/secret.mjs";
 
 const BODY_LIMIT = 1_048_576;
 
@@ -41,12 +41,26 @@ export function readBody(req, limit = BODY_LIMIT) {
   });
 }
 
-function pathname(req) {
+function requestUrl(raw) {
   try {
-    return new URL(req.url || "/", "http://127.0.0.1").pathname;
+    return new URL(raw || "/", "http://127.0.0.1");
   } catch {
-    return "/";
+    return new URL("http://127.0.0.1/");
   }
+}
+
+function pathname(req) {
+  return requestUrl(req.url).pathname;
+}
+
+function afterId(searchParams) {
+  if (!searchParams) return null;
+  const raw = searchParams.get("after");
+  if (raw == null || raw === "") return null;
+  if (!/^\d+$/.test(raw)) return undefined;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value)) return undefined;
+  return value;
 }
 
 function sendJson(res, status, body) {
@@ -67,7 +81,7 @@ function sendJson(res, status, body) {
   res.end(payload);
 }
 
-async function dispatch({ method, path, secretHeader, readRequestBody }) {
+async function dispatch({ method, path, searchParams, secretHeader, inboxKey, readRequestBody }) {
   await ensureRegistered().catch(() => {
     console.error("webhook registration failed");
   });
@@ -90,6 +104,21 @@ async function dispatch({ method, path, secretHeader, readRequestBody }) {
     if (snap.error) body.error = snap.error;
     return { status: 200, body };
   }
+
+  if (method === "GET" && path === "/inbox") {
+    if (!inboxAuthorized(inboxKey)) return { status: 404, body: { ok: false } };
+    const after = afterId(searchParams);
+    if (after === undefined) return { status: 400, body: { ok: false } };
+    try {
+      const messages = await listMessages(after);
+      return { status: 200, body: { messages } };
+    } catch (err) {
+      const code = err && typeof err.code === "string" ? err.code : "error";
+      console.error(`inbox read failed ${code}`);
+      return { status: 500, body: { ok: false } };
+    }
+  }
+
   if (path !== "/telegram") return { status: 404, body: { ok: false } };
   if (method !== "POST") return { status: 405, body: { ok: false } };
   if (!webhookAuthorized(secretHeader)) {
@@ -129,10 +158,13 @@ async function dispatch({ method, path, secretHeader, readRequestBody }) {
 
 export async function handle(req, res) {
   try {
+    const url = requestUrl(req.url);
     const result = await dispatch({
       method: req.method,
-      path: pathname(req),
+      path: url.pathname,
+      searchParams: url.searchParams,
       secretHeader: req.headers["x-telegram-bot-api-secret-token"],
+      inboxKey: req.headers["x-inbox-key"],
       readRequestBody: () => readBody(req),
     });
     sendJson(res, result.status, result.body);
@@ -159,11 +191,13 @@ function jsonResponse(status, body) {
 
 /** Host entrypoint. The function runtime invokes this; it does not run `node server.mjs`. */
 export async function fetch(request) {
-  const path = new URL(request.url).pathname;
+  const url = new URL(request.url);
   const result = await dispatch({
     method: request.method,
-    path,
+    path: url.pathname,
+    searchParams: url.searchParams,
     secretHeader: request.headers.get("x-telegram-bot-api-secret-token"),
+    inboxKey: request.headers.get("x-inbox-key"),
     readRequestBody: async () => {
       const raw = Buffer.from(await request.arrayBuffer());
       if (raw.length > BODY_LIMIT) {

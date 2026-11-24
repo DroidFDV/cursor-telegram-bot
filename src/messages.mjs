@@ -36,3 +36,36 @@ export async function messageStats() {
     lastReceivedAt,
   };
 }
+
+function asUtc(value) {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toISOString();
+}
+
+/** Stored messages newer than `afterId`, without chat id. */
+export async function listMessages(afterId) {
+  const rows = afterId == null
+    ? await sql(
+      `select update_id, received_at, chat_title, from_username, "text", caption
+       from messages
+       order by update_id
+       limit 100`,
+    )
+    : await sql(
+      `select update_id, received_at, chat_title, from_username, "text", caption
+       from messages
+       where update_id > $1
+       order by update_id
+       limit 100`,
+      [afterId],
+    );
+  return rows.map((row) => ({
+    id: Number(row.update_id),
+    receivedAt: asUtc(row.received_at),
+    chatTitle: row.chat_title ?? null,
+    username: row.from_username ?? null,
+    text: row.text ?? row.caption ?? null,
+  }));
+}
