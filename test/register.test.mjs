@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import { originFromEnv, ORIGIN_ENV } from "../src/origin.mjs";
+import { WEBHOOK_URL } from "../src/origin.mjs";
 import { ensureRegistered, resetRegistrationForTests } from "../src/register.mjs";
 import { handle, start } from "../server.mjs";
 
 const TOKEN = "100000:TESTTOKEN";
 const SECRET = "webhookSecretValue1";
-const ORIGIN = "https://inbox.example.com";
+const WEBHOOK = "https://group-inbox.apps.grok.bot/telegram";
 
 const logs = [];
 const originalError = console.error;
@@ -16,7 +16,7 @@ function saveEnv() {
   return {
     token: process.env.TELEGRAM_BOT_TOKEN,
     secret: process.env.TELEGRAM_WEBHOOK_SECRET,
-    origin: process.env[ORIGIN_ENV],
+    origin: process.env.CURSOR_APP_URL,
     database: process.env.DATABASE_URL,
   };
 }
@@ -28,6 +28,7 @@ function useCredentials() {
   process.env.TELEGRAM_WEBHOOK_SECRET = SECRET;
   delete process.env.DATABASE_URL;
   delete process.env.DATABASE_URL_UNPOOLED;
+  delete process.env.CURSOR_APP_URL;
 }
 
 describe("webhook registration", { timeout: 30_000, concurrency: 1 }, () => {
@@ -45,38 +46,28 @@ describe("webhook registration", { timeout: 30_000, concurrency: 1 }, () => {
     else process.env.TELEGRAM_BOT_TOKEN = saved.token;
     if (saved.secret === undefined) delete process.env.TELEGRAM_WEBHOOK_SECRET;
     else process.env.TELEGRAM_WEBHOOK_SECRET = saved.secret;
-    if (saved.origin === undefined) delete process.env[ORIGIN_ENV];
-    else process.env[ORIGIN_ENV] = saved.origin;
+    if (saved.origin === undefined) delete process.env.CURSOR_APP_URL;
+    else process.env.CURSOR_APP_URL = saved.origin;
     if (saved.database === undefined) delete process.env.DATABASE_URL;
     else process.env.DATABASE_URL = saved.database;
     resetRegistrationForTests();
   });
 
-  it("reads the public origin only from CURSOR_APP_URL", () => {
-    delete process.env[ORIGIN_ENV];
-    assert.equal(originFromEnv(), null);
-    process.env[ORIGIN_ENV] = "http://inbox.example.com";
-    assert.equal(originFromEnv(), null);
-    process.env[ORIGIN_ENV] = ORIGIN;
-    assert.equal(originFromEnv(), ORIGIN);
-    process.env[ORIGIN_ENV] = "inbox.example.com";
-    assert.equal(originFromEnv(), ORIGIN);
-    process.env[ORIGIN_ENV] = `https://${SECRET}.example.com`;
-    assert.equal(originFromEnv(), null);
-    assert.equal(logs.join("\n").includes(SECRET), false);
-    assert.equal(logs.join("\n").includes(TOKEN), false);
+  it("allows only the published webhook URL", () => {
+    assert.equal(WEBHOOK_URL, WEBHOOK);
   });
 
-  it("posts setWebhook to the Telegram API without putting the secret in the url", async () => {
+  it("posts setWebhook for that URL without putting the secret in it", async () => {
     resetRegistrationForTests();
     logs.length = 0;
+    process.env.CURSOR_APP_URL = "https://evil.example";
     const calls = [];
     globalThis.fetch = async (url, options) => {
       calls.push({ url: String(url), options });
       return new Response(JSON.stringify({ ok: true, result: true }), { status: 200 });
     };
 
-    const ok = await ensureRegistered(ORIGIN);
+    const ok = await ensureRegistered();
     assert.equal(ok, true);
     assert.equal(calls.length, 1);
     const endpoint = new URL(calls[0].url);
@@ -85,35 +76,36 @@ describe("webhook registration", { timeout: 30_000, concurrency: 1 }, () => {
     assert.equal(endpoint.pathname.endsWith("/setWebhook"), true);
     assert.equal(calls[0].options.redirect, "error");
     const body = JSON.parse(calls[0].options.body);
-    assert.equal(body.url, `${ORIGIN}/telegram`);
+    assert.equal(body.url, WEBHOOK);
     assert.equal(body.secret_token, SECRET);
     assert.equal(body.url.includes(SECRET), false);
     assert.equal(body.url.includes(TOKEN), false);
+    assert.equal(body.url.includes("evil.example"), false);
     assert.deepEqual(body.allowed_updates, ["message"]);
 
-    const again = await ensureRegistered(ORIGIN);
+    const again = await ensureRegistered();
     assert.equal(again, true);
     assert.equal(calls.length, 1);
 
     const joined = logs.join("\n");
     assert.equal(joined.includes(TOKEN), false);
     assert.equal(joined.includes(SECRET), false);
-    assert.equal(joined.includes(ORIGIN), false);
     assert.equal(joined.includes("setWebhook"), false);
+    delete process.env.CURSOR_APP_URL;
   });
 
   it("does not log a failed request that echoes the token", async () => {
     resetRegistrationForTests();
     logs.length = 0;
     globalThis.fetch = async () => {
-      throw new Error(`nope ${TOKEN} ${SECRET} ${ORIGIN}/telegram`);
+      throw new Error(`nope ${TOKEN} ${SECRET} ${WEBHOOK}`);
     };
-    const ok = await ensureRegistered(ORIGIN);
+    const ok = await ensureRegistered();
     assert.equal(ok, false);
     const joined = logs.join("\n");
     assert.equal(joined.includes(TOKEN), false);
     assert.equal(joined.includes(SECRET), false);
-    assert.equal(joined.includes(ORIGIN), false);
+    assert.equal(joined.includes(WEBHOOK), false);
     assert.equal(joined.includes("webhook registration failed"), true);
   });
 
@@ -127,7 +119,7 @@ describe("webhook registration", { timeout: 30_000, concurrency: 1 }, () => {
     };
     process.env.TELEGRAM_BOT_TOKEN = "1:bad@evil.example/setWebhook";
     try {
-      const ok = await ensureRegistered(ORIGIN);
+      const ok = await ensureRegistered();
       assert.equal(ok, false);
       assert.equal(called, false);
       assert.equal(logs.join("\n").includes("evil.example"), false);
@@ -138,7 +130,6 @@ describe("webhook registration", { timeout: 30_000, concurrency: 1 }, () => {
 
   it("does not register from Host or forwarded headers", async () => {
     resetRegistrationForTests();
-    delete process.env[ORIGIN_ENV];
     logs.length = 0;
     let calls = 0;
     globalThis.fetch = async () => {
@@ -164,9 +155,9 @@ describe("webhook registration", { timeout: 30_000, concurrency: 1 }, () => {
     assert.equal(joined.includes("evil.example"), false);
   });
 
-  it("skips registration on boot when CURSOR_APP_URL is unset", async () => {
+  it("skips registration on boot when a secret is missing", async () => {
     resetRegistrationForTests();
-    delete process.env[ORIGIN_ENV];
+    delete process.env.TELEGRAM_WEBHOOK_SECRET;
     logs.length = 0;
     let calls = 0;
     globalThis.fetch = async () => {
@@ -179,22 +170,22 @@ describe("webhook registration", { timeout: 30_000, concurrency: 1 }, () => {
       assert.equal(calls, 0);
       assert.equal(logs.join("\n").includes("webhook registration skipped"), true);
       assert.equal(logs.join("\n").includes(TOKEN), false);
-      assert.equal(logs.join("\n").includes(SECRET), false);
     } finally {
       await new Promise((resolve) => server.close(resolve));
+      process.env.TELEGRAM_WEBHOOK_SECRET = SECRET;
     }
   });
 
-  it("registers on boot when CURSOR_APP_URL is set", async () => {
+  it("registers the constant webhook on boot when both secrets are set", async () => {
     resetRegistrationForTests();
-    process.env[ORIGIN_ENV] = ORIGIN;
+    process.env.CURSOR_APP_URL = "https://evil.example";
     logs.length = 0;
     let calls = 0;
     globalThis.fetch = async (url, options) => {
       calls += 1;
       const endpoint = new URL(String(url));
       assert.equal(endpoint.hostname, "api.telegram.org");
-      assert.equal(JSON.parse(options.body).url, `${ORIGIN}/telegram`);
+      assert.equal(JSON.parse(options.body).url, WEBHOOK);
       assert.equal(JSON.parse(options.body).url.includes(SECRET), false);
       return new Response(JSON.stringify({ ok: true, result: true }), { status: 200 });
     };
@@ -208,7 +199,7 @@ describe("webhook registration", { timeout: 30_000, concurrency: 1 }, () => {
       assert.equal(calls, 1);
     } finally {
       await new Promise((resolve) => server.close(resolve));
-      delete process.env[ORIGIN_ENV];
+      delete process.env.CURSOR_APP_URL;
     }
   });
 });

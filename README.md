@@ -1,6 +1,6 @@
 # cursor-telegram-bot
 
-Node HTTP app that receives Telegram webhook updates and stores group messages. Telegram POSTs to this process. When the bot token, the webhook secret, and the public HTTPS origin are all present, the process registers that webhook with Telegram.
+Node HTTP app that receives Telegram webhook updates and stores group messages. Telegram POSTs to this process. When both secrets are set, the process registers `https://group-inbox.apps.grok.bot/telegram` with Telegram on boot.
 
 ## Routes
 
@@ -22,7 +22,6 @@ Set these on the published host. This repository does not contain their values, 
 | `DATABASE_URL` | Postgres connection set by the app host for the database declared in `cursor-app.json`. Do not commit it. |
 | `DATABASE_URL_UNPOOLED` | Optional direct Postgres URL the host may set. Migrations use it when it is present. |
 | `PORT` | Listen port. The host sets this. Default is `3000`. The process listens on `0.0.0.0`. |
-| `CURSOR_APP_URL` | Public HTTPS origin, if the host sets it. Example shape: `https://your-host.example`. The process does not assume a host. |
 
 ## Storage
 
@@ -40,9 +39,7 @@ History from before the bot joined the group is unavailable. Telegram only deliv
 
 ## Webhook registration
 
-On boot, the process calls Telegram `setWebhook` only when `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, and `CURSOR_APP_URL` are all set. `CURSOR_APP_URL` is the public HTTPS origin supplied by the platform. Request `Host` and forwarded headers are not used. The webhook URL is not hardcoded, and the call is not written to the log.
-
-The publish host does not set `CURSOR_APP_URL`. When that variable is absent, webhook registration is skipped. Register the webhook with Telegram after the platform provides the public origin. Do not put tokens in this repository.
+On boot, when `TELEGRAM_BOT_TOKEN` and `TELEGRAM_WEBHOOK_SECRET` are both set, the process registers `https://group-inbox.apps.grok.bot/telegram`. That origin is a constant. The process does not read `Host`, forwarded headers, or `CURSOR_APP_URL`. If either secret is missing, registration is skipped. The call is not written to the log. Do not put tokens in this repository.
 
 Telegram's servers must be able to reach `POST /telegram` without a Cursor sign-in, so the published app needs public access. No route returns stored messages.
 

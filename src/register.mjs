@@ -1,3 +1,4 @@
+import { WEBHOOK_ORIGIN, WEBHOOK_URL } from "./origin.mjs";
 import { botToken, webhookSecret } from "./secret.mjs";
 
 const TOKEN_RE = /^[0-9]+:[A-Za-z0-9_-]+$/;
@@ -22,7 +23,22 @@ function skipOnce() {
   console.error("webhook registration skipped");
 }
 
-async function postSetWebhook(origin, token, secret) {
+function allowedWebhookUrl() {
+  if (WEBHOOK_URL !== "https://group-inbox.apps.grok.bot/telegram") return null;
+  if (WEBHOOK_ORIGIN !== "https://group-inbox.apps.grok.bot") return null;
+  let url;
+  try {
+    url = new URL(WEBHOOK_URL);
+  } catch {
+    return null;
+  }
+  if (url.origin !== WEBHOOK_ORIGIN) return null;
+  if (url.protocol !== "https:" || url.hostname !== "group-inbox.apps.grok.bot") return null;
+  if (url.pathname !== "/telegram" || url.search || url.hash || url.username || url.password) return null;
+  return "https://group-inbox.apps.grok.bot/telegram";
+}
+
+async function postSetWebhook(token, secret) {
   const endpoint = new URL(`https://api.telegram.org/bot${token}/setWebhook`);
   if (
     endpoint.protocol !== "https:" ||
@@ -33,8 +49,8 @@ async function postSetWebhook(origin, token, secret) {
     return false;
   }
 
-  const webhookUrl = `${origin}/telegram`;
-  if (webhookUrl.includes(token) || webhookUrl.includes(secret)) {
+  const webhookUrl = allowedWebhookUrl();
+  if (!webhookUrl || webhookUrl.includes(token) || webhookUrl.includes(secret)) {
     skipOnce();
     return false;
   }
@@ -72,8 +88,12 @@ async function postSetWebhook(origin, token, secret) {
   return true;
 }
 
-export function ensureRegistered(origin) {
-  if (!origin) return Promise.resolve(false);
+export function ensureRegistered() {
+  const origin = allowedWebhookUrl();
+  if (!origin) {
+    skipOnce();
+    return Promise.resolve(false);
+  }
   if (registeredFor === origin) return Promise.resolve(true);
   if (inflight) return inflight;
   if (Date.now() < notBefore) return Promise.resolve(false);
@@ -86,7 +106,7 @@ export function ensureRegistered(origin) {
     return Promise.resolve(false);
   }
 
-  inflight = postSetWebhook(origin, token, secret)
+  inflight = postSetWebhook(token, secret)
     .then((ok) => {
       if (ok) registeredFor = origin;
       else notBefore = Date.now() + RETRY_MS;

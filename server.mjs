@@ -2,7 +2,6 @@ import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 import { prepareDatabase } from "./src/db.mjs";
 import { insertMessage } from "./src/messages.mjs";
-import { originFromEnv } from "./src/origin.mjs";
 import { toRecord } from "./src/record.mjs";
 import { ensureRegistered } from "./src/register.mjs";
 import { botToken, responseLeaksSecret, webhookAuthorized, webhookSecret } from "./src/secret.mjs";
@@ -154,13 +153,12 @@ export async function start(options = {}) {
     server.listen(port, host, resolve);
   });
   console.error(`listening on ${host}:${port}`);
-  const origin = originFromEnv();
-  if (origin) {
-    ensureRegistered(origin).catch(() => {
+  if (botToken().length > 0 && webhookSecret().length > 0) {
+    ensureRegistered().catch(() => {
       console.error("webhook registration failed");
     });
   } else {
-    console.error("CURSOR_APP_URL is not set; webhook registration skipped");
+    console.error("webhook registration skipped");
   }
   return server;
 }
