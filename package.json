@@ -1,0 +1,17 @@
+{
+  "name": "cursor-telegram-bot",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "build": "node scripts/migrate.mjs",
+    "test": "env -u DATABASE_URL -u DATABASE_URL_UNPOOLED node --test"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.3.15",
+    "pg": "^8.16.3"
+  }
+}
