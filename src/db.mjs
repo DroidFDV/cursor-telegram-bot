@@ -1,6 +1,5 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { PGlite } from "@electric-sql/pglite";
 import pg from "pg";
 import { applyMigrations, migrationsDir } from "./migrate.mjs";
 
@@ -22,6 +21,7 @@ function enqueue(task) {
 }
 
 async function startLocal() {
+  const { PGlite } = await import("@electric-sql/pglite");
   const db = new PGlite();
   const files = (await readdir(migrationsDir).catch(() => []))
     .filter((file) => file.endsWith(".sql"))

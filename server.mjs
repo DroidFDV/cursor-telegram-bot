@@ -67,38 +67,22 @@ function sendJson(res, status, body) {
   res.end(payload);
 }
 
-export async function handle(req, res) {
-  const path = pathname(req);
-  if (req.method === "GET" && path === "/health") {
-    sendJson(res, 200, { ok: true });
-    return;
-  }
-
-  if (path !== "/telegram") {
-    sendJson(res, 404, { ok: false });
-    return;
-  }
-  if (req.method !== "POST") {
-    sendJson(res, 405, { ok: false });
-    return;
-  }
-  if (!webhookAuthorized(req.headers["x-telegram-bot-api-secret-token"])) {
+async function dispatch({ method, path, secretHeader, readRequestBody }) {
+  if (method === "GET" && path === "/health") return { status: 200, body: { ok: true } };
+  if (path !== "/telegram") return { status: 404, body: { ok: false } };
+  if (method !== "POST") return { status: 405, body: { ok: false } };
+  if (!webhookAuthorized(secretHeader)) {
     console.error("webhook rejected");
-    sendJson(res, 401, { ok: false });
-    return;
+    return { status: 401, body: { ok: false } };
   }
 
   let raw;
   try {
-    raw = await readBody(req);
+    raw = await readRequestBody();
   } catch (err) {
-    if (err && err.code === "LIMIT") {
-      sendJson(res, 413, { ok: false });
-      return;
-    }
+    if (err && err.code === "LIMIT") return { status: 413, body: { ok: false } };
     console.error("webhook body failed");
-    sendJson(res, 400, { ok: false });
-    return;
+    return { status: 400, body: { ok: false } };
   }
 
   let update;
@@ -106,27 +90,72 @@ export async function handle(req, res) {
     update = JSON.parse(raw.toString("utf8"));
   } catch {
     console.error("webhook ignored non-json");
-    sendJson(res, 400, { ok: false });
-    return;
+    return { status: 400, body: { ok: false } };
   }
 
   const record = toRecord(update);
-  if (!record) {
-    sendJson(res, 200, { ok: true });
-    return;
-  }
+  if (!record) return { status: 200, body: { ok: true } };
 
   try {
     await insertMessage(record);
   } catch (err) {
     const code = err && typeof err.code === "string" ? err.code : "error";
     console.error(`webhook persist failed ${code}`);
-    sendJson(res, 500, { ok: false });
-    return;
+    return { status: 500, body: { ok: false } };
   }
-
-  sendJson(res, 200, { ok: true });
+  return { status: 200, body: { ok: true } };
 }
+
+export async function handle(req, res) {
+  try {
+    const result = await dispatch({
+      method: req.method,
+      path: pathname(req),
+      secretHeader: req.headers["x-telegram-bot-api-secret-token"],
+      readRequestBody: () => readBody(req),
+    });
+    sendJson(res, result.status, result.body);
+  } catch (err) {
+    const code = err && typeof err.code === "string" ? err.code : "error";
+    console.error(`webhook handler failed ${code}`);
+    if (!res.headersSent) sendJson(res, 500, { ok: false });
+  }
+}
+
+function jsonResponse(status, body) {
+  const payload = JSON.stringify(body);
+  if (responseLeaksSecret(payload)) {
+    return new Response('{"ok":false}', {
+      status: 500,
+      headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+    });
+  }
+  return new Response(payload, {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+  });
+}
+
+/** Host entrypoint. The function runtime invokes this; it does not run `node server.mjs`. */
+export async function fetch(request) {
+  const path = new URL(request.url).pathname;
+  const result = await dispatch({
+    method: request.method,
+    path,
+    secretHeader: request.headers.get("x-telegram-bot-api-secret-token"),
+    readRequestBody: async () => {
+      const raw = Buffer.from(await request.arrayBuffer());
+      if (raw.length > BODY_LIMIT) {
+        throw Object.assign(new Error("body too large"), { code: "LIMIT" });
+      }
+      return raw;
+    },
+  });
+  return jsonResponse(result.status, result.body);
+}
+
+const app = { fetch };
+export default app;
 
 export function listenPort(override) {
   if (override != null) return override;
@@ -135,16 +164,22 @@ export function listenPort(override) {
   return 3000;
 }
 
+function registerWebhook() {
+  if (botToken().length > 0 && webhookSecret().length > 0) {
+    ensureRegistered().catch(() => {
+      console.error("webhook registration failed");
+    });
+    return;
+  }
+  console.error("webhook registration skipped");
+}
+
 export async function start(options = {}) {
   if (webhookSecret().length === 0) console.error("TELEGRAM_WEBHOOK_SECRET is not set");
   if (botToken().length === 0) console.error("TELEGRAM_BOT_TOKEN is not set");
   await prepareDatabase();
   const server = createServer((req, res) => {
-    handle(req, res).catch((err) => {
-      const code = err && typeof err.code === "string" ? err.code : "error";
-      console.error(`webhook handler failed ${code}`);
-      if (!res.headersSent) sendJson(res, 500, { ok: false });
-    });
+    handle(req, res);
   });
   const port = listenPort(options.port);
   const host = options.host ?? "0.0.0.0";
@@ -153,15 +188,11 @@ export async function start(options = {}) {
     server.listen(port, host, resolve);
   });
   console.error(`listening on ${host}:${port}`);
-  if (botToken().length > 0 && webhookSecret().length > 0) {
-    ensureRegistered().catch(() => {
-      console.error("webhook registration failed");
-    });
-  } else {
-    console.error("webhook registration skipped");
-  }
+  registerWebhook();
   return server;
 }
+
+registerWebhook();
 
 const entry = process.argv[1] ? pathToFileURL(process.argv[1]).href : "";
 if (import.meta.url === entry) {

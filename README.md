@@ -51,4 +51,4 @@ npm test
 npm start
 ```
 
-`npm start` serves `GET /health` and `POST /telegram`. `npm run build` applies database migrations when `DATABASE_URL` is set, and does nothing when it is unset.
+`npm start` serves `GET /health` and `POST /telegram`. The published host does not run that process. It imports this module and calls its `fetch` handler. `npm run build` applies database migrations when `DATABASE_URL` is set, and does nothing when it is unset.

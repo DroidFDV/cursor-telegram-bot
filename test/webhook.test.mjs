@@ -3,7 +3,7 @@ import { once } from "node:events";
 import { after, before, describe, it } from "node:test";
 import { Readable } from "node:stream";
 import { sql } from "../src/db.mjs";
-import { readBody, start } from "../server.mjs";
+import app, { readBody, start } from "../server.mjs";
 
 const WEBHOOK_SECRET = "test-webhook-secret-value";
 const BOT_TOKEN = "test-bot-token-value";
@@ -59,6 +59,15 @@ describe("telegram webhook", { timeout: 60_000, concurrency: 1 }, () => {
   after(async () => {
     console.error = originalError;
     if (server) await new Promise((resolve) => server.close(resolve));
+  });
+
+  it("GET /health through the function entrypoint returns ok", async () => {
+    const response = await app.fetch(new Request("https://group-inbox.apps.grok.bot/health"));
+    const text = await response.text();
+    assert.equal(response.status, 200);
+    assert.deepEqual(JSON.parse(text), { ok: true });
+    assert.equal(text.includes(WEBHOOK_SECRET), false);
+    assert.equal(text.includes(BOT_TOKEN), false);
   });
 
   it("GET /health returns ok and no secrets", async () => {
