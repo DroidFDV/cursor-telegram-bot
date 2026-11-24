@@ -17,12 +17,15 @@ export function inboxReadKey() {
   return typeof value === "string" ? value.trim() : "";
 }
 
+export function inboxKeySet() {
+  return inboxReadKey().length > 0;
+}
+
 export function inboxAuthorized(header) {
   const expected = inboxReadKey();
-  if (expected.length === 0 || typeof header !== "string" || header.length === 0) {
-    return false;
-  }
-  const actualHash = createHash("sha256").update(header).digest();
+  const provided = typeof header === "string" ? header.trim() : "";
+  if (expected.length === 0 || provided.length === 0) return false;
+  const actualHash = createHash("sha256").update(provided).digest();
   const expectedHash = createHash("sha256").update(expected).digest();
   return timingSafeEqual(actualHash, expectedHash);
 }

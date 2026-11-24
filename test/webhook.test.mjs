@@ -69,10 +69,11 @@ describe("telegram webhook", { timeout: 60_000, concurrency: 1 }, () => {
     assert.equal(response.status, 200);
     assert.equal(JSON.parse(text).ok, true);
     assert.equal(JSON.parse(text).webhook, "pending");
-    assert.equal(JSON.parse(text).messageCount, 0);
+    assert.equal(JSON.parse(text).inboxKeySet, true);
     assert.equal(JSON.parse(text).lastReceivedAt, null);
     assert.equal(text.includes(WEBHOOK_SECRET), false);
     assert.equal(text.includes(BOT_TOKEN), false);
+    assert.equal(text.includes(INBOX_KEY), false);
   });
 
   it("GET /health returns ok and no secrets", async () => {
@@ -81,10 +82,11 @@ describe("telegram webhook", { timeout: 60_000, concurrency: 1 }, () => {
     assert.equal(response.status, 200);
     assert.equal(JSON.parse(text).ok, true);
     assert.equal(JSON.parse(text).webhook, "pending");
-    assert.equal(JSON.parse(text).messageCount, 0);
+    assert.equal(JSON.parse(text).inboxKeySet, true);
     assert.equal(JSON.parse(text).lastReceivedAt, null);
     assert.equal(text.includes(WEBHOOK_SECRET), false);
     assert.equal(text.includes(BOT_TOKEN), false);
+    assert.equal(text.includes(INBOX_KEY), false);
     assert.equal(JSON.stringify(logs).includes(WEBHOOK_SECRET), false);
     assert.equal(JSON.stringify(logs).includes(BOT_TOKEN), false);
   });
@@ -184,6 +186,10 @@ describe("telegram webhook", { timeout: 60_000, concurrency: 1 }, () => {
     assert.equal(denied.status, 404);
     const wrong = await fetch(`${base}/inbox`, { headers: { "x-inbox-key": "wrong-inbox-read-key" } });
     assert.equal(wrong.status, 404);
+    const padded = await fetch(`${base}/inbox?after=10`, {
+      headers: { "x-inbox-key": `  ${INBOX_KEY}\n` },
+    });
+    assert.equal(padded.status, 200);
     const inbox = await fetch(`${base}/inbox?after=10`, { headers: { "x-inbox-key": INBOX_KEY } });
     const inboxText = await inbox.text();
     const inboxBody = JSON.parse(inboxText);

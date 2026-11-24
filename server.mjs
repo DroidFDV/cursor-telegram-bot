@@ -4,7 +4,7 @@ import { prepareDatabase } from "./src/db.mjs";
 import { insertMessage, listMessages, messageStats } from "./src/messages.mjs";
 import { toRecord } from "./src/record.mjs";
 import { ensureRegistered, webhookStatus } from "./src/register.mjs";
-import { botToken, inboxAuthorized, responseLeaksSecret, webhookAuthorized, webhookSecret } from "./src/secret.mjs";
+import { botToken, inboxAuthorized, inboxKeySet, responseLeaksSecret, webhookAuthorized, webhookSecret } from "./src/secret.mjs";
 
 const BODY_LIMIT = 1_048_576;
 
@@ -98,6 +98,7 @@ async function dispatch({ method, path, searchParams, secretHeader, inboxKey, re
     const body = {
       ok: true,
       webhook: snap.status,
+      inboxKeySet: inboxKeySet(),
       messageCount: stats.messageCount,
       lastReceivedAt: stats.lastReceivedAt,
     };
