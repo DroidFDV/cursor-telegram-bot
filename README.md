@@ -1,6 +1,6 @@
 # cursor-telegram-bot
 
-Node HTTP app that receives Telegram webhook updates and stores group messages. Telegram POSTs to this process. When both secrets are set, the process registers `https://group-inbox.apps.grok.bot/telegram` with Telegram on boot.
+Node HTTP app that receives Telegram webhook updates and stores group messages. Telegram POSTs to this process. The first request registers `https://group-inbox.apps.grok.bot/telegram` when both secrets are set.
 
 ## Routes
 
@@ -39,7 +39,7 @@ History from before the bot joined the group is unavailable. Telegram only deliv
 
 ## Webhook registration
 
-On boot, when `TELEGRAM_BOT_TOKEN` and `TELEGRAM_WEBHOOK_SECRET` are both set, the process registers `https://group-inbox.apps.grok.bot/telegram`. That origin is a constant. The process does not read `Host`, forwarded headers, or `CURSOR_APP_URL`. If either secret is missing, registration is skipped. The call is not written to the log. Do not put tokens in this repository.
+On the first request, when `TELEGRAM_BOT_TOKEN` and `TELEGRAM_WEBHOOK_SECRET` are both set, the handler registers `https://group-inbox.apps.grok.bot/telegram`, then checks Telegram. `GET /health` reports that check as `registered`, `pending`, or `failed`, and includes Telegram's error description when there is one. The response does not include the bot token, the webhook secret, or the webhook URL. The origin is a constant. The process does not read `Host`, forwarded headers, or `CURSOR_APP_URL`. If either secret is missing, registration is skipped and health stays `pending`. Do not put tokens in this repository.
 
 Telegram's servers must be able to reach `POST /telegram` without a Cursor sign-in, so the published app needs public access. No route returns stored messages.
 

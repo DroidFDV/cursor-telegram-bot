@@ -3,7 +3,7 @@ import { pathToFileURL } from "node:url";
 import { prepareDatabase } from "./src/db.mjs";
 import { insertMessage } from "./src/messages.mjs";
 import { toRecord } from "./src/record.mjs";
-import { ensureRegistered } from "./src/register.mjs";
+import { ensureRegistered, webhookStatus } from "./src/register.mjs";
 import { botToken, responseLeaksSecret, webhookAuthorized, webhookSecret } from "./src/secret.mjs";
 
 const BODY_LIMIT = 1_048_576;
@@ -68,7 +68,16 @@ function sendJson(res, status, body) {
 }
 
 async function dispatch({ method, path, secretHeader, readRequestBody }) {
-  if (method === "GET" && path === "/health") return { status: 200, body: { ok: true } };
+  await ensureRegistered().catch(() => {
+    console.error("webhook registration failed");
+  });
+
+  if (method === "GET" && path === "/health") {
+    const snap = webhookStatus();
+    const body = { ok: true, webhook: snap.status };
+    if (snap.error) body.error = snap.error;
+    return { status: 200, body };
+  }
   if (path !== "/telegram") return { status: 404, body: { ok: false } };
   if (method !== "POST") return { status: 405, body: { ok: false } };
   if (!webhookAuthorized(secretHeader)) {
@@ -164,16 +173,6 @@ export function listenPort(override) {
   return 3000;
 }
 
-function registerWebhook() {
-  if (botToken().length > 0 && webhookSecret().length > 0) {
-    ensureRegistered().catch(() => {
-      console.error("webhook registration failed");
-    });
-    return;
-  }
-  console.error("webhook registration skipped");
-}
-
 export async function start(options = {}) {
   if (webhookSecret().length === 0) console.error("TELEGRAM_WEBHOOK_SECRET is not set");
   if (botToken().length === 0) console.error("TELEGRAM_BOT_TOKEN is not set");
@@ -188,11 +187,8 @@ export async function start(options = {}) {
     server.listen(port, host, resolve);
   });
   console.error(`listening on ${host}:${port}`);
-  registerWebhook();
   return server;
 }
-
-registerWebhook();
 
 const entry = process.argv[1] ? pathToFileURL(process.argv[1]).href : "";
 if (import.meta.url === entry) {

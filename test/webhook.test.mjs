@@ -65,7 +65,7 @@ describe("telegram webhook", { timeout: 60_000, concurrency: 1 }, () => {
     const response = await app.fetch(new Request("https://group-inbox.apps.grok.bot/health"));
     const text = await response.text();
     assert.equal(response.status, 200);
-    assert.deepEqual(JSON.parse(text), { ok: true });
+    assert.deepEqual(JSON.parse(text), { ok: true, webhook: "pending" });
     assert.equal(text.includes(WEBHOOK_SECRET), false);
     assert.equal(text.includes(BOT_TOKEN), false);
   });
@@ -74,7 +74,7 @@ describe("telegram webhook", { timeout: 60_000, concurrency: 1 }, () => {
     const response = await fetch(`${base}/health`);
     const text = await response.text();
     assert.equal(response.status, 200);
-    assert.deepEqual(JSON.parse(text), { ok: true });
+    assert.deepEqual(JSON.parse(text), { ok: true, webhook: "pending" });
     assert.equal(text.includes(WEBHOOK_SECRET), false);
     assert.equal(text.includes(BOT_TOKEN), false);
     assert.equal(JSON.stringify(logs).includes(WEBHOOK_SECRET), false);

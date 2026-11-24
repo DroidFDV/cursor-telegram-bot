@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
+import app, { handle } from "../server.mjs";
 import { WEBHOOK_URL } from "../src/origin.mjs";
 import { ensureRegistered, resetRegistrationForTests } from "../src/register.mjs";
-import { handle, start } from "../server.mjs";
 
 const TOKEN = "100000:TESTTOKEN";
 const SECRET = "webhookSecretValue1";
@@ -63,13 +63,20 @@ describe("webhook registration", { timeout: 30_000, concurrency: 1 }, () => {
     process.env.CURSOR_APP_URL = "https://evil.example";
     const calls = [];
     globalThis.fetch = async (url, options) => {
-      calls.push({ url: String(url), options });
+      const endpoint = new URL(String(url));
+      calls.push({ url: String(url), options, pathname: endpoint.pathname });
+      if (endpoint.pathname.endsWith("/getWebhookInfo")) {
+        return new Response(JSON.stringify({
+          ok: true,
+          result: { url: WEBHOOK, pending_update_count: 0 },
+        }), { status: 200 });
+      }
       return new Response(JSON.stringify({ ok: true, result: true }), { status: 200 });
     };
 
     const ok = await ensureRegistered();
     assert.equal(ok, true);
-    assert.equal(calls.length, 1);
+    assert.equal(calls.length, 2);
     const endpoint = new URL(calls[0].url);
     assert.equal(endpoint.protocol, "https:");
     assert.equal(endpoint.hostname, "api.telegram.org");
@@ -82,10 +89,11 @@ describe("webhook registration", { timeout: 30_000, concurrency: 1 }, () => {
     assert.equal(body.url.includes(TOKEN), false);
     assert.equal(body.url.includes("evil.example"), false);
     assert.deepEqual(body.allowed_updates, ["message"]);
+    assert.equal(calls[1].pathname.endsWith("/getWebhookInfo"), true);
 
     const again = await ensureRegistered();
     assert.equal(again, true);
-    assert.equal(calls.length, 1);
+    assert.equal(calls.length, 2);
 
     const joined = logs.join("\n");
     assert.equal(joined.includes(TOKEN), false);
@@ -131,12 +139,25 @@ describe("webhook registration", { timeout: 30_000, concurrency: 1 }, () => {
   it("does not register from Host or forwarded headers", async () => {
     resetRegistrationForTests();
     logs.length = 0;
-    let calls = 0;
-    globalThis.fetch = async () => {
-      calls += 1;
+    const calls = [];
+    globalThis.fetch = async (url, options) => {
+      const endpoint = new URL(String(url));
+      calls.push({ pathname: endpoint.pathname, body: options.body });
+      if (endpoint.pathname.endsWith("/getWebhookInfo")) {
+        return new Response(JSON.stringify({
+          ok: true,
+          result: { url: WEBHOOK },
+        }), { status: 200 });
+      }
       return new Response(JSON.stringify({ ok: true, result: true }), { status: 200 });
     };
-    const res = { headersSent: false, writeHead() {}, end() {} };
+    const res = {
+      headersSent: false,
+      status: 0,
+      body: "",
+      writeHead(code) { this.status = code; this.headersSent = true; },
+      end(payload) { this.body = payload; },
+    };
     await handle({
       method: "GET",
       url: "/health",
@@ -146,16 +167,21 @@ describe("webhook registration", { timeout: 30_000, concurrency: 1 }, () => {
         "x-forwarded-host": "inbox.example.com",
       },
     }, res);
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(calls, 0);
+    assert.equal(calls.length, 2);
+    assert.equal(JSON.parse(calls[0].body).url, WEBHOOK);
+    assert.equal(calls[0].body.includes("evil.example"), false);
+    assert.equal(calls[0].body.includes("inbox.example.com"), false);
+    assert.equal(res.body.includes(WEBHOOK), false);
+    assert.equal(res.body.includes(TOKEN), false);
+    assert.equal(res.body.includes(SECRET), false);
+    assert.equal(res.body.includes("group-inbox.apps.grok.bot"), false);
     const joined = logs.join("\n");
     assert.equal(joined.includes(TOKEN), false);
     assert.equal(joined.includes(SECRET), false);
-    assert.equal(joined.includes("inbox.example.com"), false);
-    assert.equal(joined.includes("evil.example"), false);
+    assert.equal(joined.includes(WEBHOOK), false);
   });
 
-  it("skips registration on boot when a secret is missing", async () => {
+  it("skips registration when a secret is missing", async () => {
     resetRegistrationForTests();
     delete process.env.TELEGRAM_WEBHOOK_SECRET;
     logs.length = 0;
@@ -164,19 +190,17 @@ describe("webhook registration", { timeout: 30_000, concurrency: 1 }, () => {
       calls += 1;
       return new Response(JSON.stringify({ ok: true, result: true }), { status: 200 });
     };
-    const server = await start({ port: 0, host: "127.0.0.1" });
-    try {
-      await new Promise((resolve) => setImmediate(resolve));
-      assert.equal(calls, 0);
-      assert.equal(logs.join("\n").includes("webhook registration skipped"), true);
-      assert.equal(logs.join("\n").includes(TOKEN), false);
-    } finally {
-      await new Promise((resolve) => server.close(resolve));
-      process.env.TELEGRAM_WEBHOOK_SECRET = SECRET;
-    }
+    const response = await app.fetch(new Request("https://group-inbox.apps.grok.bot/health"));
+    const text = await response.text();
+    assert.equal(response.status, 200);
+    assert.equal(JSON.parse(text).webhook, "pending");
+    assert.equal(calls, 0);
+    assert.equal(text.includes(TOKEN), false);
+    assert.equal(text.includes(WEBHOOK), false);
+    process.env.TELEGRAM_WEBHOOK_SECRET = SECRET;
   });
 
-  it("registers the constant webhook on boot when both secrets are set", async () => {
+  it("registers on the first request and hides the webhook URL", async () => {
     resetRegistrationForTests();
     process.env.CURSOR_APP_URL = "https://evil.example";
     logs.length = 0;
@@ -185,21 +209,53 @@ describe("webhook registration", { timeout: 30_000, concurrency: 1 }, () => {
       calls += 1;
       const endpoint = new URL(String(url));
       assert.equal(endpoint.hostname, "api.telegram.org");
-      assert.equal(JSON.parse(options.body).url, WEBHOOK);
-      assert.equal(JSON.parse(options.body).url.includes(SECRET), false);
+      if (endpoint.pathname.endsWith("/getWebhookInfo")) {
+        return new Response(JSON.stringify({
+          ok: true,
+          result: {
+            url: WEBHOOK,
+            last_error_message: `delivery failed for ${WEBHOOK} token ${TOKEN}`,
+          },
+        }), { status: 200 });
+      }
+      const body = JSON.parse(options.body);
+      assert.equal(body.url, WEBHOOK);
+      assert.equal(body.url.includes(SECRET), false);
       return new Response(JSON.stringify({ ok: true, result: true }), { status: 200 });
     };
-    const server = await start({ port: 0, host: "127.0.0.1" });
-    try {
-      await new Promise((resolve) => setImmediate(resolve));
-      assert.equal(calls, 1);
-      const response = await originalFetch(`http://127.0.0.1:${server.address().port}/health`);
-      assert.equal(response.status, 200);
-      assert.equal((await response.text()).includes(SECRET), false);
-      assert.equal(calls, 1);
-    } finally {
-      await new Promise((resolve) => server.close(resolve));
-      delete process.env.CURSOR_APP_URL;
-    }
+    const response = await app.fetch(new Request("https://group-inbox.apps.grok.bot/health"));
+    const text = await response.text();
+    const payload = JSON.parse(text);
+    assert.equal(response.status, 200);
+    assert.equal(payload.webhook, "registered");
+    assert.equal(typeof payload.error, "string");
+    assert.equal(text.includes(SECRET), false);
+    assert.equal(text.includes(TOKEN), false);
+    assert.equal(text.includes(WEBHOOK), false);
+    assert.equal(text.includes("group-inbox.apps.grok.bot"), false);
+    assert.equal(calls, 2);
+    const again = await app.fetch(new Request("https://group-inbox.apps.grok.bot/health"));
+    assert.equal((await again.json()).webhook, "registered");
+    assert.equal(calls, 2);
+    delete process.env.CURSOR_APP_URL;
+  });
+
+  it("records a failed registration without returning the webhook URL", async () => {
+    resetRegistrationForTests();
+    logs.length = 0;
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      ok: false,
+      description: `Bad Request: ${WEBHOOK} secret ${SECRET}`,
+    }), { status: 400 });
+    const response = await app.fetch(new Request("https://group-inbox.apps.grok.bot/health"));
+    const text = await response.text();
+    const payload = JSON.parse(text);
+    assert.equal(payload.webhook, "failed");
+    assert.equal(text.includes(WEBHOOK), false);
+    assert.equal(text.includes(SECRET), false);
+    assert.equal(text.includes("group-inbox.apps.grok.bot"), false);
+    assert.equal(text.includes("[redacted]"), true);
+    assert.equal(logs.join("\n").includes(SECRET), false);
+    assert.equal(logs.join("\n").includes(WEBHOOK), false);
   });
 });

@@ -3,24 +3,39 @@ import { botToken, webhookSecret } from "./secret.mjs";
 
 const TOKEN_RE = /^[0-9]+:[A-Za-z0-9_-]+$/;
 const SECRET_RE = /^[A-Za-z0-9_-]{1,256}$/;
-const RETRY_MS = 60_000;
 
-let registeredFor = null;
 let inflight = null;
-let notBefore = 0;
-let warned = false;
+let settled = false;
+let state = { status: "pending", error: undefined };
 
-export function resetRegistrationForTests() {
-  registeredFor = null;
-  inflight = null;
-  notBefore = 0;
-  warned = false;
+export function webhookStatus() {
+  return { status: state.status, error: state.error };
 }
 
-function skipOnce() {
-  if (warned) return;
-  warned = true;
-  console.error("webhook registration skipped");
+export function resetRegistrationForTests() {
+  inflight = null;
+  settled = false;
+  state = { status: "pending", error: undefined };
+}
+
+function publicError(description) {
+  if (typeof description !== "string") return undefined;
+  let text = description.trim();
+  if (!text) return undefined;
+  const token = botToken();
+  const secret = webhookSecret();
+  if (token) text = text.split(token).join("[redacted]");
+  if (secret) text = text.split(secret).join("[redacted]");
+  text = text.split(WEBHOOK_URL).join("[redacted]");
+  text = text.split(WEBHOOK_ORIGIN).join("[redacted]");
+  text = text.replace(/bot\d+:[A-Za-z0-9_-]+/g, "bot[redacted]");
+  if (text.length > 180) text = text.slice(0, 180);
+  return text;
+}
+
+function remember(status, description) {
+  state = { status, error: publicError(description) };
+  settled = true;
 }
 
 function allowedWebhookUrl() {
@@ -38,21 +53,14 @@ function allowedWebhookUrl() {
   return "https://group-inbox.apps.grok.bot/telegram";
 }
 
-async function postSetWebhook(token, secret) {
-  const endpoint = new URL(`https://api.telegram.org/bot${token}/setWebhook`);
+async function telegramMethod(token, method, body) {
+  const endpoint = new URL(`https://api.telegram.org/bot${token}/${method}`);
   if (
     endpoint.protocol !== "https:" ||
     endpoint.hostname !== "api.telegram.org" ||
-    !endpoint.pathname.endsWith("/setWebhook")
+    endpoint.pathname !== `/bot${token}/${method}`
   ) {
-    skipOnce();
-    return false;
-  }
-
-  const webhookUrl = allowedWebhookUrl();
-  if (!webhookUrl || webhookUrl.includes(token) || webhookUrl.includes(secret)) {
-    skipOnce();
-    return false;
+    return { ok: false, description: "telegram request rejected" };
   }
 
   let response;
@@ -61,16 +69,12 @@ async function postSetWebhook(token, secret) {
       method: "POST",
       redirect: "error",
       headers: { "content-type": "application/json", accept: "application/json" },
-      body: JSON.stringify({
-        url: webhookUrl,
-        secret_token: secret,
-        allowed_updates: ["message"],
-      }),
+      body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(10_000),
     });
   } catch {
     console.error("webhook registration failed");
-    return false;
+    return { ok: false, description: "telegram request failed" };
   }
 
   let data = null;
@@ -78,42 +82,69 @@ async function postSetWebhook(token, secret) {
     data = await response.json();
   } catch {
     console.error("webhook registration failed");
-    return false;
+    return { ok: false, description: "telegram request failed" };
   }
   if (!response.ok || !data || data.ok !== true) {
     console.error(`webhook registration failed ${response.status}`);
-    return false;
+    const description = data && typeof data.description === "string"
+      ? data.description
+      : "telegram request failed";
+    return { ok: false, description };
   }
-  console.error("webhook registered");
-  return true;
+  return { ok: true, result: data.result };
 }
 
-export function ensureRegistered() {
-  const origin = allowedWebhookUrl();
-  if (!origin) {
-    skipOnce();
-    return Promise.resolve(false);
+async function registerAndConfirm(token, secret) {
+  const webhookUrl = allowedWebhookUrl();
+  if (!webhookUrl || webhookUrl.includes(token) || webhookUrl.includes(secret)) {
+    remember("failed", "telegram request rejected");
+    return false;
   }
-  if (registeredFor === origin) return Promise.resolve(true);
+
+  const set = await telegramMethod(token, "setWebhook", {
+    url: webhookUrl,
+    secret_token: secret,
+    allowed_updates: ["message"],
+  });
+  if (!set.ok) {
+    remember("failed", set.description);
+    return false;
+  }
+
+  const info = await telegramMethod(token, "getWebhookInfo");
+  if (!info.ok) {
+    remember("failed", info.description);
+    return false;
+  }
+
+  const result = info.result && typeof info.result === "object" ? info.result : {};
+  const current = typeof result.url === "string" ? result.url : "";
+  const deliveryError = typeof result.last_error_message === "string" ? result.last_error_message : undefined;
+  if (current === webhookUrl) {
+    remember("registered", deliveryError);
+    console.error("webhook registered");
+    return true;
+  }
+  remember("pending", deliveryError);
+  return false;
+}
+
+/** First request only. Later calls reuse the recorded status. */
+export function ensureRegistered() {
+  if (settled) return Promise.resolve(state.status === "registered");
   if (inflight) return inflight;
-  if (Date.now() < notBefore) return Promise.resolve(false);
 
   const token = botToken();
   const secret = webhookSecret();
   if (!token || !secret) return Promise.resolve(false);
-  if (!TOKEN_RE.test(token) || !SECRET_RE.test(secret)) {
-    skipOnce();
+  if (!TOKEN_RE.test(token) || !SECRET_RE.test(secret)) return Promise.resolve(false);
+  if (!allowedWebhookUrl()) {
+    remember("failed", "telegram request rejected");
     return Promise.resolve(false);
   }
 
-  inflight = postSetWebhook(token, secret)
-    .then((ok) => {
-      if (ok) registeredFor = origin;
-      else notBefore = Date.now() + RETRY_MS;
-      return ok;
-    })
-    .finally(() => {
-      inflight = null;
-    });
+  inflight = registerAndConfirm(token, secret).finally(() => {
+    inflight = null;
+  });
   return inflight;
 }
