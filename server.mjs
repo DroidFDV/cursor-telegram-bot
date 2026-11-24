@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 import { prepareDatabase } from "./src/db.mjs";
-import { insertMessage } from "./src/messages.mjs";
+import { insertMessage, messageStats } from "./src/messages.mjs";
 import { toRecord } from "./src/record.mjs";
 import { ensureRegistered, webhookStatus } from "./src/register.mjs";
 import { botToken, responseLeaksSecret, webhookAuthorized, webhookSecret } from "./src/secret.mjs";
@@ -74,7 +74,19 @@ async function dispatch({ method, path, secretHeader, readRequestBody }) {
 
   if (method === "GET" && path === "/health") {
     const snap = webhookStatus();
-    const body = { ok: true, webhook: snap.status };
+    let stats = { messageCount: 0, lastReceivedAt: null };
+    try {
+      stats = await messageStats();
+    } catch (err) {
+      const code = err && typeof err.code === "string" ? err.code : "error";
+      console.error(`health stats failed ${code}`);
+    }
+    const body = {
+      ok: true,
+      webhook: snap.status,
+      messageCount: stats.messageCount,
+      lastReceivedAt: stats.lastReceivedAt,
+    };
     if (snap.error) body.error = snap.error;
     return { status: 200, body };
   }

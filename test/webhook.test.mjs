@@ -65,7 +65,10 @@ describe("telegram webhook", { timeout: 60_000, concurrency: 1 }, () => {
     const response = await app.fetch(new Request("https://group-inbox.apps.grok.bot/health"));
     const text = await response.text();
     assert.equal(response.status, 200);
-    assert.deepEqual(JSON.parse(text), { ok: true, webhook: "pending" });
+    assert.equal(JSON.parse(text).ok, true);
+    assert.equal(JSON.parse(text).webhook, "pending");
+    assert.equal(JSON.parse(text).messageCount, 0);
+    assert.equal(JSON.parse(text).lastReceivedAt, null);
     assert.equal(text.includes(WEBHOOK_SECRET), false);
     assert.equal(text.includes(BOT_TOKEN), false);
   });
@@ -74,7 +77,10 @@ describe("telegram webhook", { timeout: 60_000, concurrency: 1 }, () => {
     const response = await fetch(`${base}/health`);
     const text = await response.text();
     assert.equal(response.status, 200);
-    assert.deepEqual(JSON.parse(text), { ok: true, webhook: "pending" });
+    assert.equal(JSON.parse(text).ok, true);
+    assert.equal(JSON.parse(text).webhook, "pending");
+    assert.equal(JSON.parse(text).messageCount, 0);
+    assert.equal(JSON.parse(text).lastReceivedAt, null);
     assert.equal(text.includes(WEBHOOK_SECRET), false);
     assert.equal(text.includes(BOT_TOKEN), false);
     assert.equal(JSON.stringify(logs).includes(WEBHOOK_SECRET), false);
@@ -161,6 +167,16 @@ describe("telegram webhook", { timeout: 60_000, concurrency: 1 }, () => {
     assert.equal(rows[2].media_kind, "document");
     assert.equal(Number(rows[2].chat_id), -42);
     assert.equal(rows[3].media_kind, "voice");
+
+    const health = await fetch(`${base}/health`);
+    const healthText = await health.text();
+    const healthBody = JSON.parse(healthText);
+    assert.equal(healthBody.messageCount >= 4, true);
+    assert.match(healthBody.lastReceivedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    assert.equal(healthText.includes("привет"), false);
+    assert.equal(healthText.includes("ada"), false);
+    assert.equal(healthText.includes("Project Brozzers"), false);
+    assert.equal(healthText.includes("-1001234567890"), false);
 
     const dumped = JSON.stringify(rows);
     assert.equal(dumped.includes("file-secret-id"), false);

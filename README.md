@@ -6,7 +6,7 @@ Node HTTP app that receives Telegram webhook updates and stores group messages. 
 
 | Method | Path | Behavior |
 | --- | --- | --- |
-| `GET` | `/health` | Returns `{"ok":true}`. No secrets and no message contents. |
+| `GET` | `/health` | Returns `{"ok":true}` plus webhook status, `messageCount`, and `lastReceivedAt` in UTC or `null`. No secrets, message text, username, chat title, or chat id. |
 | `POST` | `/telegram` | Telegram webhook. Requires header `X-Telegram-Bot-Api-Secret-Token` to match `TELEGRAM_WEBHOOK_SECRET`. A missing or wrong secret is rejected. A matching request is acknowledged with HTTP 200. |
 
 Stored updates are `message` updates from a group or supergroup that include text, a caption, or a photo, document, or voice. Each saved row keeps chat id, chat title, from username, message id, and date, plus text, caption, and media kind (`photo`, `document`, or `voice`). Other update types are acknowledged and ignored. File bytes are not downloaded.

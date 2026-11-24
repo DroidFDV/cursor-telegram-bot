@@ -19,3 +19,20 @@ export async function insertMessage(record) {
     ],
   );
 }
+
+export async function messageStats() {
+  const rows = await sql(
+    `select count(*)::int as message_count, max(received_at) as last_received_at from messages`,
+  );
+  const row = rows[0] || {};
+  const count = Number(row.message_count);
+  let lastReceivedAt = null;
+  if (row.last_received_at) {
+    const parsed = new Date(row.last_received_at);
+    if (!Number.isNaN(parsed.getTime())) lastReceivedAt = parsed.toISOString();
+  }
+  return {
+    messageCount: Number.isFinite(count) ? count : 0,
+    lastReceivedAt,
+  };
+}
