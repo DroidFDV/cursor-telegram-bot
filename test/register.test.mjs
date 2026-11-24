@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import { originFromEnv, originFromForwarded, ORIGIN_ENV } from "../src/origin.mjs";
+import { originFromEnv, ORIGIN_ENV } from "../src/origin.mjs";
 import { ensureRegistered, resetRegistrationForTests } from "../src/register.mjs";
 import { handle, start } from "../server.mjs";
 
@@ -65,29 +65,6 @@ describe("webhook registration", { timeout: 30_000, concurrency: 1 }, () => {
     assert.equal(originFromEnv(), null);
     assert.equal(logs.join("\n").includes(SECRET), false);
     assert.equal(logs.join("\n").includes(TOKEN), false);
-  });
-
-  it("accepts one https forwarded host and rejects a chain", () => {
-    assert.equal(originFromForwarded({
-      "x-forwarded-proto": "https",
-      "x-forwarded-host": "inbox.example.com",
-    }), ORIGIN);
-    assert.equal(originFromForwarded({
-      "x-forwarded-proto": "http",
-      "x-forwarded-host": "inbox.example.com",
-    }), null);
-    assert.equal(originFromForwarded({
-      "x-forwarded-proto": "https",
-      "x-forwarded-host": "evil.example, inbox.example.com",
-    }), null);
-    assert.equal(originFromForwarded({
-      "x-forwarded-proto": "https, https",
-      "x-forwarded-host": "inbox.example.com",
-    }), null);
-    assert.equal(originFromForwarded({
-      "x-forwarded-proto": "https",
-      "x-forwarded-host": "localhost",
-    }), null);
   });
 
   it("posts setWebhook to the Telegram API without putting the secret in the url", async () => {
@@ -159,15 +136,13 @@ describe("webhook registration", { timeout: 30_000, concurrency: 1 }, () => {
     }
   });
 
-  it("registers from the first trusted forwarded host on a request", async () => {
+  it("does not register from Host or forwarded headers", async () => {
     resetRegistrationForTests();
     delete process.env[ORIGIN_ENV];
     logs.length = 0;
     let calls = 0;
-    globalThis.fetch = async (url, options) => {
+    globalThis.fetch = async () => {
       calls += 1;
-      assert.equal(new URL(String(url)).hostname, "api.telegram.org");
-      assert.equal(JSON.parse(options.body).url, `${ORIGIN}/telegram`);
       return new Response(JSON.stringify({ ok: true, result: true }), { status: 200 });
     };
     const res = { headersSent: false, writeHead() {}, end() {} };
@@ -175,22 +150,39 @@ describe("webhook registration", { timeout: 30_000, concurrency: 1 }, () => {
       method: "GET",
       url: "/health",
       headers: {
+        host: "evil.example",
         "x-forwarded-proto": "https",
         "x-forwarded-host": "inbox.example.com",
       },
     }, res);
     await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(calls, 1);
-    await handle({
-      method: "GET",
-      url: "/health",
-      headers: {
-        "x-forwarded-proto": "https",
-        "x-forwarded-host": "inbox.example.com",
-      },
-    }, res);
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(calls, 1);
+    assert.equal(calls, 0);
+    const joined = logs.join("\n");
+    assert.equal(joined.includes(TOKEN), false);
+    assert.equal(joined.includes(SECRET), false);
+    assert.equal(joined.includes("inbox.example.com"), false);
+    assert.equal(joined.includes("evil.example"), false);
+  });
+
+  it("skips registration on boot when CURSOR_APP_URL is unset", async () => {
+    resetRegistrationForTests();
+    delete process.env[ORIGIN_ENV];
+    logs.length = 0;
+    let calls = 0;
+    globalThis.fetch = async () => {
+      calls += 1;
+      return new Response(JSON.stringify({ ok: true, result: true }), { status: 200 });
+    };
+    const server = await start({ port: 0, host: "127.0.0.1" });
+    try {
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(calls, 0);
+      assert.equal(logs.join("\n").includes("webhook registration skipped"), true);
+      assert.equal(logs.join("\n").includes(TOKEN), false);
+      assert.equal(logs.join("\n").includes(SECRET), false);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
   });
 
   it("registers on boot when CURSOR_APP_URL is set", async () => {

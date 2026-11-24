@@ -40,9 +40,9 @@ History from before the bot joined the group is unavailable. Telegram only deliv
 
 ## Webhook registration
 
-On boot, if `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, and `CURSOR_APP_URL` are set, the process registers `POST /telegram` with Telegram and sends the webhook secret as Telegram's secret token. The public URL is not hardcoded. Nothing in that call is written to the log.
+On boot, the process calls Telegram `setWebhook` only when `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, and `CURSOR_APP_URL` are all set. `CURSOR_APP_URL` is the public HTTPS origin supplied by the platform. Request `Host` and forwarded headers are not used. The webhook URL is not hardcoded, and the call is not written to the log.
 
-This host does not provide the public origin, so `CURSOR_APP_URL` stays unset here. Registration then waits for the first request whose `x-forwarded-proto` is `https` and whose `x-forwarded-host` is a single public host. That pair is the trusted forwarded host.
+The publish host does not set `CURSOR_APP_URL`. When that variable is absent, webhook registration is skipped. Register the webhook with Telegram after the platform provides the public origin. Do not put tokens in this repository.
 
 Telegram's servers must be able to reach `POST /telegram` without a Cursor sign-in, so the published app needs public access. No route returns stored messages.
 

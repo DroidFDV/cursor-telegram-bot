@@ -56,17 +56,3 @@ export function normalizeOrigin(raw) {
 export function originFromEnv() {
   return normalizeOrigin(process.env[ORIGIN_ENV]);
 }
-
-/**
- * Origin from a single trusted forwarded host.
- * A comma-separated list is rejected: that chain is not one proxy-owned value.
- */
-export function originFromForwarded(headers) {
-  if (!headers || typeof headers !== "object") return null;
-  const proto = headers["x-forwarded-proto"];
-  const host = headers["x-forwarded-host"];
-  if (typeof proto !== "string" || typeof host !== "string") return null;
-  if (proto.includes(",") || host.includes(",")) return null;
-  if (proto.trim().toLowerCase() !== "https") return null;
-  return normalizeOrigin(host.trim());
-}
