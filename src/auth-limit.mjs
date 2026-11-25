@@ -8,14 +8,14 @@ export function resetAuthLimitsForTests() {
   buckets.clear();
 }
 
-export function clientKey(header) {
-  const raw = Array.isArray(header) ? header[0] : header;
-  let address = "unknown";
-  if (typeof raw === "string" && raw.trim()) {
-    const parts = raw.split(",").map((part) => part.trim()).filter(Boolean);
-    address = parts[parts.length - 1] || "unknown";
-  }
-  return createHash("sha256").update(address).digest("hex").slice(0, 32);
+/** Trusted platform address only. A client-supplied X-Forwarded-For is ignored. */
+export function clientKey(trustedForwardedFor) {
+  const raw = Array.isArray(trustedForwardedFor) ? trustedForwardedFor[0] : trustedForwardedFor;
+  if (typeof raw !== "string" || !raw.trim()) return "shared";
+  const parts = raw.split(",").map((part) => part.trim()).filter(Boolean);
+  const address = parts[parts.length - 1];
+  if (!address) return "shared";
+  return createHash("sha256").update(`trusted:${address}`).digest("hex").slice(0, 32);
 }
 
 function entry(scope, client) {

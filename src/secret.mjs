@@ -11,10 +11,6 @@ export function webhookSecret() {
   return trimmedEnv("TELEGRAM_WEBHOOK_SECRET");
 }
 
-export function webhookSecretShorterThan16() {
-  return webhookSecret().length < 16;
-}
-
 export function inboxReadKey() {
   const trimmed = trimmedEnv("INBOX_READ_KEY");
   // One accidental wrapper only. A second "key=" is left in place.
@@ -22,31 +18,9 @@ export function inboxReadKey() {
   return trimmed;
 }
 
-export function inboxDiagnostics() {
-  const trimmed = trimmedEnv("INBOX_READ_KEY");
-  const quoteWrapped = trimmed.length >= 2 && (
-    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-    (trimmed.startsWith("'") && trimmed.endsWith("'"))
-  );
-  return {
-    inboxTrimmedLength: trimmed.length,
-    inboxStartsWithKeyEq: trimmed.startsWith("key="),
-    inboxQuoteWrapped: quoteWrapped,
-    inboxLengthAfterQuoteStrip: quoteWrapped ? trimmed.length - 2 : trimmed.length,
-  };
-}
-
 function trimmedEnv(name) {
   const value = process.env[name];
   return typeof value === "string" ? value.trim() : "";
-}
-
-export function inboxKeySet() {
-  return inboxReadKey().length > 0;
-}
-
-export function inboxKeyLength() {
-  return inboxReadKey().length;
 }
 
 function keysMatch(expected, provided) {
@@ -70,7 +44,7 @@ export function inboxAuthorized(inboxHeader, authorizationHeader) {
 
 export function webhookAuthorized(header) {
   const expected = webhookSecret();
-  if (expected.length === 0 || typeof header !== "string" || header.length === 0) {
+  if (expected.length < 16 || typeof header !== "string" || header.length === 0) {
     return false;
   }
   const actualHash = createHash("sha256").update(header).digest();

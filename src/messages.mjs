@@ -154,3 +154,17 @@ export async function listMessages(afterId) {
     text: row.text ?? row.caption ?? null,
   }));
 }
+
+/** Keep the newest 200 messages. Fewer rows are left untouched. */
+export async function pruneMessages() {
+  await sql(
+    `delete from messages
+     where update_id in (
+       select update_id from (
+         select update_id from messages
+         order by received_at desc, update_id desc
+         offset 200
+       ) as old_messages
+     )`,
+  );
+}

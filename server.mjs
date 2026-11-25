@@ -2,10 +2,10 @@ import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 import { authFailureBlocked, clientKey, recordAuthFailure } from "./src/auth-limit.mjs";
 import { prepareDatabase } from "./src/db.mjs";
-import { insertMessage, listMessages, takeInboxRead, takeWebhookInsert } from "./src/messages.mjs";
+import { insertMessage, listMessages, pruneMessages, takeInboxRead, takeWebhookInsert } from "./src/messages.mjs";
 import { toRecord } from "./src/record.mjs";
 import { ensureRegistered } from "./src/register.mjs";
-import { botToken, inboxAuthorized, inboxDiagnostics, responseLeaksSecret, webhookAuthorized, webhookSecret, webhookSecretShorterThan16 } from "./src/secret.mjs";
+import { botToken, inboxAuthorized, responseLeaksSecret, webhookAuthorized, webhookSecret } from "./src/secret.mjs";
 
 const BODY_LIMIT = 1_048_576;
 
@@ -84,14 +84,7 @@ function sendJson(res, status, body) {
 
 async function dispatch({ method, path, searchParams, secretHeader, inboxKey, authorization, forwardedFor, readRequestBody }) {
   if (method === "GET" && path === "/health") {
-    return {
-      status: 200,
-      body: {
-        ok: true,
-        ...inboxDiagnostics(),
-        webhookSecretShorterThan16: webhookSecretShorterThan16(),
-      },
-    };
+    return { status: 200, body: { ok: true } };
   }
 
   const client = clientKey(forwardedFor);
@@ -167,6 +160,7 @@ async function dispatch({ method, path, searchParams, secretHeader, inboxKey, au
 
   try {
     await insertMessage(record);
+    await pruneMessages();
   } catch (err) {
     const code = err && typeof err.code === "string" ? err.code : "error";
     console.error(`webhook persist failed ${code}`);
@@ -185,7 +179,7 @@ export async function handle(req, res) {
       secretHeader: req.headers["x-telegram-bot-api-secret-token"],
       inboxKey: req.headers["x-inbox-key"],
       authorization: req.headers.authorization,
-      forwardedFor: req.headers["x-forwarded-for"],
+      forwardedFor: req.headers["x-vercel-forwarded-for"],
       readRequestBody: () => readBody(req),
     });
     sendJson(res, result.status, result.body);
@@ -220,7 +214,7 @@ export async function fetch(request) {
     secretHeader: request.headers.get("x-telegram-bot-api-secret-token"),
     inboxKey: request.headers.get("x-inbox-key"),
     authorization: request.headers.get("authorization"),
-    forwardedFor: request.headers.get("x-forwarded-for"),
+    forwardedFor: request.headers.get("x-vercel-forwarded-for"),
     readRequestBody: async () => {
       const raw = Buffer.from(await request.arrayBuffer());
       if (raw.length > BODY_LIMIT) {
