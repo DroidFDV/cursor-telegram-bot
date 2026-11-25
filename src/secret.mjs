@@ -21,13 +21,27 @@ export function inboxKeySet() {
   return inboxReadKey().length > 0;
 }
 
-export function inboxAuthorized(header) {
-  const expected = inboxReadKey();
-  const provided = typeof header === "string" ? header.trim() : "";
+export function inboxKeyLength() {
+  return inboxReadKey().length;
+}
+
+function keysMatch(expected, provided) {
   if (expected.length === 0 || provided.length === 0) return false;
   const actualHash = createHash("sha256").update(provided).digest();
   const expectedHash = createHash("sha256").update(expected).digest();
   return timingSafeEqual(actualHash, expectedHash);
+}
+
+function bearerToken(header) {
+  if (typeof header !== "string") return "";
+  const match = header.trim().match(/^Bearer\s+(\S.*)$/i);
+  return match ? match[1].trim() : "";
+}
+
+export function inboxAuthorized(inboxHeader, authorizationHeader) {
+  const expected = inboxReadKey();
+  const fromInbox = typeof inboxHeader === "string" ? inboxHeader.trim() : "";
+  return keysMatch(expected, fromInbox) || keysMatch(expected, bearerToken(authorizationHeader));
 }
 
 export function webhookAuthorized(header) {

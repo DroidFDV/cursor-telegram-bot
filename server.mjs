@@ -4,7 +4,7 @@ import { prepareDatabase } from "./src/db.mjs";
 import { insertMessage, listMessages, messageStats } from "./src/messages.mjs";
 import { toRecord } from "./src/record.mjs";
 import { ensureRegistered, webhookStatus } from "./src/register.mjs";
-import { botToken, inboxAuthorized, inboxKeySet, responseLeaksSecret, webhookAuthorized, webhookSecret } from "./src/secret.mjs";
+import { botToken, inboxAuthorized, inboxKeyLength, inboxKeySet, responseLeaksSecret, webhookAuthorized, webhookSecret } from "./src/secret.mjs";
 
 const BODY_LIMIT = 1_048_576;
 
@@ -81,7 +81,7 @@ function sendJson(res, status, body) {
   res.end(payload);
 }
 
-async function dispatch({ method, path, searchParams, secretHeader, inboxKey, readRequestBody }) {
+async function dispatch({ method, path, searchParams, secretHeader, inboxKey, authorization, readRequestBody }) {
   await ensureRegistered().catch(() => {
     console.error("webhook registration failed");
   });
@@ -99,6 +99,7 @@ async function dispatch({ method, path, searchParams, secretHeader, inboxKey, re
       ok: true,
       webhook: snap.status,
       inboxKeySet: inboxKeySet(),
+      inboxKeyLength: inboxKeyLength(),
       messageCount: stats.messageCount,
       lastReceivedAt: stats.lastReceivedAt,
     };
@@ -107,7 +108,7 @@ async function dispatch({ method, path, searchParams, secretHeader, inboxKey, re
   }
 
   if (method === "GET" && path === "/inbox") {
-    if (!inboxAuthorized(inboxKey)) return { status: 404, body: { ok: false } };
+    if (!inboxAuthorized(inboxKey, authorization)) return { status: 404, body: { ok: false } };
     const after = afterId(searchParams);
     if (after === undefined) return { status: 400, body: { ok: false } };
     try {
@@ -166,6 +167,7 @@ export async function handle(req, res) {
       searchParams: url.searchParams,
       secretHeader: req.headers["x-telegram-bot-api-secret-token"],
       inboxKey: req.headers["x-inbox-key"],
+      authorization: req.headers.authorization,
       readRequestBody: () => readBody(req),
     });
     sendJson(res, result.status, result.body);
@@ -199,6 +201,7 @@ export async function fetch(request) {
     searchParams: url.searchParams,
     secretHeader: request.headers.get("x-telegram-bot-api-secret-token"),
     inboxKey: request.headers.get("x-inbox-key"),
+    authorization: request.headers.get("authorization"),
     readRequestBody: async () => {
       const raw = Buffer.from(await request.arrayBuffer());
       if (raw.length > BODY_LIMIT) {
