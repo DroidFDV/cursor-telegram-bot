@@ -170,9 +170,8 @@ describe("webhook registration", { timeout: 30_000, concurrency: 1 }, () => {
         "x-forwarded-host": "inbox.example.com",
       },
     }, res);
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0].pathname.endsWith("/getWebhookInfo"), true);
-    assert.equal(calls.some((call) => String(call.pathname).endsWith("/setWebhook")), false);
+    assert.equal(calls.length, 0);
+    assert.equal(res.body, '{"ok":true}');
     assert.equal(res.body.includes(WEBHOOK), false);
     assert.equal(res.body.includes(TOKEN), false);
     assert.equal(res.body.includes(SECRET), false);
@@ -195,7 +194,7 @@ describe("webhook registration", { timeout: 30_000, concurrency: 1 }, () => {
     const response = await app.fetch(new Request("https://group-inbox.apps.grok.bot/health"));
     const text = await response.text();
     assert.equal(response.status, 200);
-    assert.equal(JSON.parse(text).webhook, "pending");
+    assert.deepEqual(JSON.parse(text), { ok: true });
     assert.equal(calls, 0);
     assert.equal(text.includes(TOKEN), false);
     assert.equal(text.includes(WEBHOOK), false);
@@ -225,19 +224,26 @@ describe("webhook registration", { timeout: 30_000, concurrency: 1 }, () => {
       assert.equal(body.url.includes(SECRET), false);
       return new Response(JSON.stringify({ ok: true, result: true }), { status: 200 });
     };
-    const response = await app.fetch(new Request("https://group-inbox.apps.grok.bot/health"));
+    const response = await app.fetch(new Request("https://group-inbox.apps.grok.bot/telegram", {
+      method: "POST",
+      headers: { "x-telegram-bot-api-secret-token": SECRET },
+      body: "{}",
+    }));
     const text = await response.text();
-    const payload = JSON.parse(text);
     assert.equal(response.status, 200);
-    assert.equal(payload.webhook, "registered");
-    assert.equal(typeof payload.error, "string");
     assert.equal(text.includes(SECRET), false);
     assert.equal(text.includes(TOKEN), false);
     assert.equal(text.includes(WEBHOOK), false);
     assert.equal(text.includes("group-inbox.apps.grok.bot"), false);
     assert.equal(calls, 1);
-    const again = await app.fetch(new Request("https://group-inbox.apps.grok.bot/health"));
-    assert.equal((await again.json()).webhook, "registered");
+    const health = await app.fetch(new Request("https://group-inbox.apps.grok.bot/health"));
+    assert.deepEqual(await health.json(), { ok: true });
+    const again = await app.fetch(new Request("https://group-inbox.apps.grok.bot/telegram", {
+      method: "POST",
+      headers: { "x-telegram-bot-api-secret-token": SECRET },
+      body: "{}",
+    }));
+    await again.arrayBuffer();
     assert.equal(calls, 1);
     delete process.env.CURSOR_APP_URL;
   });
@@ -249,14 +255,18 @@ describe("webhook registration", { timeout: 30_000, concurrency: 1 }, () => {
       ok: false,
       description: `Bad Request: ${WEBHOOK} secret ${SECRET}`,
     }), { status: 400 });
-    const response = await app.fetch(new Request("https://group-inbox.apps.grok.bot/health"));
+    const response = await app.fetch(new Request("https://group-inbox.apps.grok.bot/telegram", {
+      method: "POST",
+      headers: { "x-telegram-bot-api-secret-token": SECRET },
+      body: "{}",
+    }));
     const text = await response.text();
-    const payload = JSON.parse(text);
-    assert.equal(payload.webhook, "failed");
     assert.equal(text.includes(WEBHOOK), false);
     assert.equal(text.includes(SECRET), false);
     assert.equal(text.includes("group-inbox.apps.grok.bot"), false);
-    assert.equal(text.includes("[redacted]"), true);
+    assert.equal(text.includes("Bad Request"), false);
+    const health = await app.fetch(new Request("https://group-inbox.apps.grok.bot/health"));
+    assert.deepEqual(await health.json(), { ok: true });
     assert.equal(logs.join("\n").includes(SECRET), false);
     assert.equal(logs.join("\n").includes(WEBHOOK), false);
   });
@@ -277,16 +287,21 @@ describe("webhook registration", { timeout: 30_000, concurrency: 1 }, () => {
         parameters: { retry_after: 1 },
       }), { status: 429 });
     };
-    const first = await app.fetch(new Request("https://group-inbox.apps.grok.bot/health"));
-    const firstText = await first.text();
-    assert.equal(JSON.parse(firstText).webhook, "failed");
-    assert.equal(firstText.includes("retry after 1"), true);
-    assert.equal(firstText.includes(WEBHOOK), false);
+    const first = await app.fetch(new Request("https://group-inbox.apps.grok.bot/telegram", {
+      method: "POST",
+      headers: { "x-telegram-bot-api-secret-token": SECRET },
+      body: "{}",
+    }));
+    await first.arrayBuffer();
     assert.equal(setCalls, 1);
 
     forgetMemoryForTests();
-    const second = await app.fetch(new Request("https://group-inbox.apps.grok.bot/health"));
-    assert.equal((await second.json()).webhook, "failed");
+    const second = await app.fetch(new Request("https://group-inbox.apps.grok.bot/telegram", {
+      method: "POST",
+      headers: { "x-telegram-bot-api-secret-token": SECRET },
+      body: "{}",
+    }));
+    await second.arrayBuffer();
     assert.equal(setCalls, 1);
     assert.equal(logs.join("\n").includes(TOKEN), false);
     assert.equal(logs.join("\n").includes(SECRET), false);

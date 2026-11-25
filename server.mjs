@@ -1,10 +1,10 @@
 import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 import { prepareDatabase } from "./src/db.mjs";
-import { insertMessage, listMessages, messageStats } from "./src/messages.mjs";
+import { insertMessage, listMessages, takeInboxRead } from "./src/messages.mjs";
 import { toRecord } from "./src/record.mjs";
-import { ensureRegistered, webhookStatus } from "./src/register.mjs";
-import { botToken, inboxAuthorized, inboxKeyLength, inboxKeySet, responseLeaksSecret, webhookAuthorized, webhookSecret } from "./src/secret.mjs";
+import { ensureRegistered } from "./src/register.mjs";
+import { botToken, inboxAuthorized, responseLeaksSecret, webhookAuthorized, webhookSecret } from "./src/secret.mjs";
 
 const BODY_LIMIT = 1_048_576;
 
@@ -82,33 +82,21 @@ function sendJson(res, status, body) {
 }
 
 async function dispatch({ method, path, searchParams, secretHeader, inboxKey, authorization, readRequestBody }) {
-  await ensureRegistered().catch(() => {
-    console.error("webhook registration failed");
-  });
-
   if (method === "GET" && path === "/health") {
-    const snap = webhookStatus();
-    let stats = { messageCount: 0, lastReceivedAt: null };
-    try {
-      stats = await messageStats();
-    } catch (err) {
-      const code = err && typeof err.code === "string" ? err.code : "error";
-      console.error(`health stats failed ${code}`);
-    }
-    const body = {
-      ok: true,
-      webhook: snap.status,
-      inboxKeySet: inboxKeySet(),
-      inboxKeyLength: inboxKeyLength(),
-      messageCount: stats.messageCount,
-      lastReceivedAt: stats.lastReceivedAt,
-    };
-    if (snap.error) body.error = snap.error;
-    return { status: 200, body };
+    return { status: 200, body: { ok: true } };
   }
 
   if (method === "GET" && path === "/inbox") {
     if (!inboxAuthorized(inboxKey, authorization)) return { status: 404, body: { ok: false } };
+    const allowed = await takeInboxRead().catch((err) => {
+      const code = err && typeof err.code === "string" ? err.code : "error";
+      console.error(`inbox limit failed ${code}`);
+      return false;
+    });
+    if (!allowed) return { status: 429, body: { ok: false } };
+    await ensureRegistered().catch(() => {
+      console.error("webhook registration failed");
+    });
     const after = afterId(searchParams);
     if (after === undefined) return { status: 400, body: { ok: false } };
     try {
@@ -127,6 +115,10 @@ async function dispatch({ method, path, searchParams, secretHeader, inboxKey, au
     console.error("webhook rejected");
     return { status: 401, body: { ok: false } };
   }
+
+  await ensureRegistered().catch(() => {
+    console.error("webhook registration failed");
+  });
 
   let raw;
   try {

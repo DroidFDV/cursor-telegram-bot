@@ -14,7 +14,10 @@ export function webhookSecret() {
 
 export function inboxReadKey() {
   const value = process.env.INBOX_READ_KEY;
-  return typeof value === "string" ? value.trim() : "";
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  // One accidental wrapper: a leading "key=" makes a 43-character secret 47 characters.
+  if (trimmed.startsWith("key=") && trimmed.length > 4) return trimmed.slice(4);
+  return trimmed;
 }
 
 export function inboxKeySet() {

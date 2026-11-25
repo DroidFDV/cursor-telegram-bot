@@ -6,8 +6,8 @@ Node HTTP app that receives Telegram webhook updates and stores group messages. 
 
 | Method | Path | Behavior |
 | --- | --- | --- |
-| `GET` | `/health` | Returns `{"ok":true}` plus webhook status, `inboxKeySet`, `inboxKeyLength` (trimmed length only), `messageCount`, and `lastReceivedAt` in UTC or `null`. No key, hash, secrets, message text, username, chat title, or chat id. |
-| `GET` | `/inbox` | Returns stored messages when `x-inbox-key` or `Authorization: Bearer` matches `INBOX_READ_KEY` after trim. Otherwise 404. The key is not read from the query string. Each item has `id`, `receivedAt`, `chatTitle`, `username`, and `text`. Optional `after` returns only newer ids. No bot token, webhook secret, or chat id. |
+| `GET` | `/health` | Returns `{"ok":true}`. No secrets, key length, message text, username, chat title, chat id, message counts, or webhook detail. |
+| `GET` | `/inbox` | Returns stored messages when `x-inbox-key` or `Authorization: Bearer` matches `INBOX_READ_KEY` after trim. A single leading `key=` on the environment value is ignored. Otherwise 404. The key is not read from the query string. Authorized reads are limited to about 30 per minute. Each item has `id`, `receivedAt`, `chatTitle`, `username`, and `text`. Optional `after` returns only newer ids. No bot token, webhook secret, or chat id. |
 | `POST` | `/telegram` | Telegram webhook. Requires header `X-Telegram-Bot-Api-Secret-Token` to match `TELEGRAM_WEBHOOK_SECRET`. A missing or wrong secret is rejected. A matching request is acknowledged with HTTP 200. |
 
 Stored updates are `message` updates from a group or supergroup that include text, a caption, or a photo, document, or voice. Each saved row keeps chat id, chat title, from username, message id, and date, plus text, caption, and media kind (`photo`, `document`, or `voice`). Other update types are acknowledged and ignored. File bytes are not downloaded.

@@ -37,6 +37,56 @@ export async function messageStats() {
   };
 }
 
+const INBOX_LIMIT = 30;
+const INBOX_WINDOW_MS = 60_000;
+let inboxRateReady = null;
+
+async function ensureInboxRateTable() {
+  inboxRateReady ??= sql(
+    `create table if not exists inbox_rate (
+      id integer primary key,
+      window_start timestamptz not null,
+      hits integer not null,
+      constraint inbox_rate_id_chk check (id = 1)
+    )`,
+  ).then(() => {});
+  return inboxRateReady;
+}
+
+export async function resetInboxRateForTests() {
+  inboxRateReady = null;
+  try {
+    await sql("delete from inbox_rate");
+  } catch {
+    // The table is created on the first authorized read.
+  }
+}
+
+/** About 30 authorized inbox reads per minute. */
+export async function takeInboxRead() {
+  await ensureInboxRateTable();
+  const rows = await sql("select window_start, hits from inbox_rate where id = 1");
+  const now = Date.now();
+  let start = now;
+  let hits = 0;
+  if (rows[0]) {
+    const parsed = new Date(rows[0].window_start).getTime();
+    hits = Number(rows[0].hits) || 0;
+    if (Number.isFinite(parsed) && now - parsed < INBOX_WINDOW_MS) start = parsed;
+    else hits = 0;
+  }
+  if (hits >= INBOX_LIMIT) return false;
+  hits += 1;
+  await sql(
+    `insert into inbox_rate (id, window_start, hits)
+     values (1, $1, $2)
+     on conflict (id) do update
+     set window_start = excluded.window_start, hits = excluded.hits`,
+    [new Date(start).toISOString(), hits],
+  );
+  return true;
+}
+
 function asUtc(value) {
   if (!value) return null;
   const parsed = new Date(value);

@@ -3,6 +3,7 @@ import { once } from "node:events";
 import { after, before, describe, it } from "node:test";
 import { Readable } from "node:stream";
 import { sql } from "../src/db.mjs";
+import { resetInboxRateForTests } from "../src/messages.mjs";
 import app, { readBody, start } from "../server.mjs";
 
 const WEBHOOK_SECRET = "test-webhook-secret-value";
@@ -67,28 +68,26 @@ describe("telegram webhook", { timeout: 60_000, concurrency: 1 }, () => {
     const response = await app.fetch(new Request("https://group-inbox.apps.grok.bot/health"));
     const text = await response.text();
     assert.equal(response.status, 200);
-    assert.equal(JSON.parse(text).ok, true);
-    assert.equal(JSON.parse(text).webhook, "pending");
-    assert.equal(JSON.parse(text).inboxKeySet, true);
-    assert.equal(JSON.parse(text).inboxKeyLength, INBOX_KEY.length);
-    assert.equal(JSON.parse(text).lastReceivedAt, null);
+    assert.deepEqual(JSON.parse(text), { ok: true });
     assert.equal(text.includes(WEBHOOK_SECRET), false);
     assert.equal(text.includes(BOT_TOKEN), false);
     assert.equal(text.includes(INBOX_KEY), false);
+    assert.equal(text.includes("inboxKeyLength"), false);
+    assert.equal(text.includes("messageCount"), false);
+    assert.equal(text.includes("webhook"), false);
   });
 
   it("GET /health returns ok and no secrets", async () => {
     const response = await fetch(`${base}/health`);
     const text = await response.text();
     assert.equal(response.status, 200);
-    assert.equal(JSON.parse(text).ok, true);
-    assert.equal(JSON.parse(text).webhook, "pending");
-    assert.equal(JSON.parse(text).inboxKeySet, true);
-    assert.equal(JSON.parse(text).inboxKeyLength, INBOX_KEY.length);
-    assert.equal(JSON.parse(text).lastReceivedAt, null);
+    assert.deepEqual(JSON.parse(text), { ok: true });
     assert.equal(text.includes(WEBHOOK_SECRET), false);
     assert.equal(text.includes(BOT_TOKEN), false);
     assert.equal(text.includes(INBOX_KEY), false);
+    assert.equal(text.includes("inboxKeyLength"), false);
+    assert.equal(text.includes("messageCount"), false);
+    assert.equal(text.includes("webhook"), false);
     assert.equal(JSON.stringify(logs).includes(WEBHOOK_SECRET), false);
     assert.equal(JSON.stringify(logs).includes(BOT_TOKEN), false);
   });
@@ -176,9 +175,7 @@ describe("telegram webhook", { timeout: 60_000, concurrency: 1 }, () => {
 
     const health = await fetch(`${base}/health`);
     const healthText = await health.text();
-    const healthBody = JSON.parse(healthText);
-    assert.equal(healthBody.messageCount >= 4, true);
-    assert.match(healthBody.lastReceivedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    assert.deepEqual(JSON.parse(healthText), { ok: true });
     assert.equal(healthText.includes("привет"), false);
     assert.equal(healthText.includes("ada"), false);
     assert.equal(healthText.includes("Project Brozzers"), false);
@@ -209,6 +206,41 @@ describe("telegram webhook", { timeout: 60_000, concurrency: 1 }, () => {
     assert.equal(inboxText.includes(INBOX_KEY), false);
     assert.equal(inboxText.includes(WEBHOOK_SECRET), false);
     assert.equal(inboxText.includes(BOT_TOKEN), false);
+
+    const previousKey = process.env.INBOX_READ_KEY;
+    process.env.INBOX_READ_KEY = `key=${INBOX_KEY}`;
+    try {
+      const wrapped = await fetch(`${base}/inbox?after=10`, { headers: { "x-inbox-key": INBOX_KEY } });
+      assert.equal(wrapped.status, 200);
+      const shorter = await fetch(`${base}/inbox?after=10`, {
+        headers: { "x-inbox-key": INBOX_KEY.slice(0, -1) },
+      });
+      assert.equal(shorter.status, 404);
+      const different = await fetch(`${base}/inbox?after=10`, {
+        headers: { "x-inbox-key": `other-${INBOX_KEY}` },
+      });
+      assert.equal(different.status, 404);
+      process.env.INBOX_READ_KEY = `key=key=${INBOX_KEY}`;
+      const doubleWrapped = await fetch(`${base}/inbox?after=10`, { headers: { "x-inbox-key": INBOX_KEY } });
+      assert.equal(doubleWrapped.status, 404);
+    } finally {
+      process.env.INBOX_READ_KEY = previousKey;
+    }
+
+    await resetInboxRateForTests();
+    let allowed = 0;
+    for (let i = 0; i < 30; i += 1) {
+      const response = await fetch(`${base}/inbox?after=10`, { headers: { "x-inbox-key": INBOX_KEY } });
+      if (response.status === 200) allowed += 1;
+      await response.arrayBuffer();
+    }
+    assert.equal(allowed, 30);
+    const limited = await fetch(`${base}/inbox?after=10`, { headers: { "x-inbox-key": INBOX_KEY } });
+    const limitedText = await limited.text();
+    assert.equal(limited.status, 429);
+    assert.equal(limitedText.includes("look"), false);
+    const stillDenied = await fetch(`${base}/inbox`, { headers: { "x-inbox-key": "wrong-inbox-read-key" } });
+    assert.equal(stillDenied.status, 404);
 
     const dumped = JSON.stringify(rows);
     assert.equal(dumped.includes("file-secret-id"), false);
