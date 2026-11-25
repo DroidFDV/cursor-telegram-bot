@@ -8,16 +8,37 @@ export function botToken() {
 
 /** Webhook secret, only from the environment. Never log or send this value. */
 export function webhookSecret() {
-  const value = process.env.TELEGRAM_WEBHOOK_SECRET;
-  return typeof value === "string" ? value.trim() : "";
+  return trimmedEnv("TELEGRAM_WEBHOOK_SECRET");
+}
+
+export function webhookSecretShorterThan16() {
+  return webhookSecret().length < 16;
 }
 
 export function inboxReadKey() {
-  const value = process.env.INBOX_READ_KEY;
-  const trimmed = typeof value === "string" ? value.trim() : "";
-  // One accidental wrapper: a leading "key=" makes a 43-character secret 47 characters.
+  const trimmed = trimmedEnv("INBOX_READ_KEY");
+  // One accidental wrapper only. A second "key=" is left in place.
   if (trimmed.startsWith("key=") && trimmed.length > 4) return trimmed.slice(4);
   return trimmed;
+}
+
+export function inboxDiagnostics() {
+  const trimmed = trimmedEnv("INBOX_READ_KEY");
+  const quoteWrapped = trimmed.length >= 2 && (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  );
+  return {
+    inboxTrimmedLength: trimmed.length,
+    inboxStartsWithKeyEq: trimmed.startsWith("key="),
+    inboxQuoteWrapped: quoteWrapped,
+    inboxLengthAfterQuoteStrip: quoteWrapped ? trimmed.length - 2 : trimmed.length,
+  };
+}
+
+function trimmedEnv(name) {
+  const value = process.env[name];
+  return typeof value === "string" ? value.trim() : "";
 }
 
 export function inboxKeySet() {

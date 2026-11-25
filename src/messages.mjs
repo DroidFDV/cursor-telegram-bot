@@ -37,8 +37,35 @@ export async function messageStats() {
   };
 }
 
+const WINDOW_MS = 60_000;
 const INBOX_LIMIT = 30;
-const INBOX_WINDOW_MS = 60_000;
+const WEBHOOK_INSERT_LIMIT = 120;
+
+async function takeWindow(ready, limit) {
+  await ready();
+  const table = ready === ensureInboxRateTable ? "inbox_rate" : "webhook_ingest";
+  const rows = await sql(`select window_start, hits from ${table} where id = 1`);
+  const now = Date.now();
+  let start = now;
+  let hits = 0;
+  if (rows[0]) {
+    const parsed = new Date(rows[0].window_start).getTime();
+    hits = Number(rows[0].hits) || 0;
+    if (Number.isFinite(parsed) && now - parsed < WINDOW_MS) start = parsed;
+    else hits = 0;
+  }
+  if (hits >= limit) return false;
+  hits += 1;
+  await sql(
+    `insert into ${table} (id, window_start, hits)
+     values (1, $1, $2)
+     on conflict (id) do update
+     set window_start = excluded.window_start, hits = excluded.hits`,
+    [new Date(start).toISOString(), hits],
+  );
+  return true;
+}
+
 let inboxRateReady = null;
 
 async function ensureInboxRateTable() {
@@ -53,6 +80,20 @@ async function ensureInboxRateTable() {
   return inboxRateReady;
 }
 
+let webhookIngestReady = null;
+
+async function ensureWebhookIngestTable() {
+  webhookIngestReady ??= sql(
+    `create table if not exists webhook_ingest (
+      id integer primary key,
+      window_start timestamptz not null,
+      hits integer not null,
+      constraint webhook_ingest_id_chk check (id = 1)
+    )`,
+  ).then(() => {});
+  return webhookIngestReady;
+}
+
 export async function resetInboxRateForTests() {
   inboxRateReady = null;
   try {
@@ -62,29 +103,23 @@ export async function resetInboxRateForTests() {
   }
 }
 
+export async function resetWebhookIngestForTests() {
+  webhookIngestReady = null;
+  try {
+    await sql("delete from webhook_ingest");
+  } catch {
+    // The table is created on the first accepted insert.
+  }
+}
+
 /** About 30 authorized inbox reads per minute. */
 export async function takeInboxRead() {
-  await ensureInboxRateTable();
-  const rows = await sql("select window_start, hits from inbox_rate where id = 1");
-  const now = Date.now();
-  let start = now;
-  let hits = 0;
-  if (rows[0]) {
-    const parsed = new Date(rows[0].window_start).getTime();
-    hits = Number(rows[0].hits) || 0;
-    if (Number.isFinite(parsed) && now - parsed < INBOX_WINDOW_MS) start = parsed;
-    else hits = 0;
-  }
-  if (hits >= INBOX_LIMIT) return false;
-  hits += 1;
-  await sql(
-    `insert into inbox_rate (id, window_start, hits)
-     values (1, $1, $2)
-     on conflict (id) do update
-     set window_start = excluded.window_start, hits = excluded.hits`,
-    [new Date(start).toISOString(), hits],
-  );
-  return true;
+  return takeWindow(ensureInboxRateTable, INBOX_LIMIT);
+}
+
+/** About 120 authenticated webhook inserts per minute. */
+export async function takeWebhookInsert() {
+  return takeWindow(ensureWebhookIngestTable, WEBHOOK_INSERT_LIMIT);
 }
 
 function asUtc(value) {

@@ -3,7 +3,8 @@ import { once } from "node:events";
 import { after, before, describe, it } from "node:test";
 import { Readable } from "node:stream";
 import { sql } from "../src/db.mjs";
-import { resetInboxRateForTests } from "../src/messages.mjs";
+import { resetInboxRateForTests, resetWebhookIngestForTests, takeWebhookInsert } from "../src/messages.mjs";
+import { resetAuthLimitsForTests } from "../src/auth-limit.mjs";
 import app, { readBody, start } from "../server.mjs";
 
 const WEBHOOK_SECRET = "test-webhook-secret-value";
@@ -68,26 +69,38 @@ describe("telegram webhook", { timeout: 60_000, concurrency: 1 }, () => {
     const response = await app.fetch(new Request("https://group-inbox.apps.grok.bot/health"));
     const text = await response.text();
     assert.equal(response.status, 200);
-    assert.deepEqual(JSON.parse(text), { ok: true });
+    const healthBody = JSON.parse(text);
+    assert.equal(healthBody.ok, true);
+    assert.equal(healthBody.inboxTrimmedLength, INBOX_KEY.length);
+    assert.equal(healthBody.inboxStartsWithKeyEq, false);
+    assert.equal(healthBody.inboxQuoteWrapped, false);
+    assert.equal(healthBody.inboxLengthAfterQuoteStrip, INBOX_KEY.length);
+    assert.equal(healthBody.webhookSecretShorterThan16, false);
+    assert.equal(healthBody.messageCount, undefined);
+    assert.equal(healthBody.webhook, undefined);
+    assert.equal(healthBody.inboxKeyLength, undefined);
     assert.equal(text.includes(WEBHOOK_SECRET), false);
     assert.equal(text.includes(BOT_TOKEN), false);
     assert.equal(text.includes(INBOX_KEY), false);
-    assert.equal(text.includes("inboxKeyLength"), false);
-    assert.equal(text.includes("messageCount"), false);
-    assert.equal(text.includes("webhook"), false);
   });
 
   it("GET /health returns ok and no secrets", async () => {
     const response = await fetch(`${base}/health`);
     const text = await response.text();
     assert.equal(response.status, 200);
-    assert.deepEqual(JSON.parse(text), { ok: true });
+    const healthBody = JSON.parse(text);
+    assert.equal(healthBody.ok, true);
+    assert.equal(healthBody.inboxTrimmedLength, INBOX_KEY.length);
+    assert.equal(healthBody.inboxStartsWithKeyEq, false);
+    assert.equal(healthBody.inboxQuoteWrapped, false);
+    assert.equal(healthBody.inboxLengthAfterQuoteStrip, INBOX_KEY.length);
+    assert.equal(healthBody.webhookSecretShorterThan16, false);
+    assert.equal(healthBody.messageCount, undefined);
+    assert.equal(healthBody.webhook, undefined);
+    assert.equal(healthBody.inboxKeyLength, undefined);
     assert.equal(text.includes(WEBHOOK_SECRET), false);
     assert.equal(text.includes(BOT_TOKEN), false);
     assert.equal(text.includes(INBOX_KEY), false);
-    assert.equal(text.includes("inboxKeyLength"), false);
-    assert.equal(text.includes("messageCount"), false);
-    assert.equal(text.includes("webhook"), false);
     assert.equal(JSON.stringify(logs).includes(WEBHOOK_SECRET), false);
     assert.equal(JSON.stringify(logs).includes(BOT_TOKEN), false);
   });
@@ -175,7 +188,10 @@ describe("telegram webhook", { timeout: 60_000, concurrency: 1 }, () => {
 
     const health = await fetch(`${base}/health`);
     const healthText = await health.text();
-    assert.deepEqual(JSON.parse(healthText), { ok: true });
+    const healthBody = JSON.parse(healthText);
+    assert.equal(healthBody.ok, true);
+    assert.equal(healthBody.messageCount, undefined);
+    assert.equal(healthBody.lastReceivedAt, undefined);
     assert.equal(healthText.includes("привет"), false);
     assert.equal(healthText.includes("ada"), false);
     assert.equal(healthText.includes("Project Brozzers"), false);
@@ -241,6 +257,51 @@ describe("telegram webhook", { timeout: 60_000, concurrency: 1 }, () => {
     assert.equal(limitedText.includes("look"), false);
     const stillDenied = await fetch(`${base}/inbox`, { headers: { "x-inbox-key": "wrong-inbox-read-key" } });
     assert.equal(stillDenied.status, 404);
+
+    await resetAuthLimitsForTests();
+    const lockedIp = "203.0.113.20";
+    for (let i = 0; i < 10; i += 1) {
+      const response = await fetch(`${base}/inbox`, {
+        headers: { "x-inbox-key": "wrong-inbox-read-key", "x-forwarded-for": lockedIp },
+      });
+      assert.equal(response.status, 404);
+      await response.arrayBuffer();
+    }
+    const locked = await fetch(`${base}/inbox?after=10`, {
+      headers: { "x-inbox-key": INBOX_KEY, "x-forwarded-for": lockedIp },
+    });
+    assert.equal(locked.status, 404);
+    await resetInboxRateForTests();
+    const otherIp = await fetch(`${base}/inbox?after=10`, {
+      headers: { "x-inbox-key": INBOX_KEY, "x-forwarded-for": "203.0.113.21" },
+    });
+    assert.equal(otherIp.status, 200);
+    await otherIp.arrayBuffer();
+
+    const shortSecret = "short";
+    const savedSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
+    process.env.TELEGRAM_WEBHOOK_SECRET = shortSecret;
+    try {
+      const flagged = await fetch(`${base}/health`);
+      const flaggedBody = await flagged.json();
+      assert.equal(flaggedBody.webhookSecretShorterThan16, true);
+      const accepted = await post(groupMessage({ update_id: 77, message: { message_id: 77, text: "kept" } }), {
+        secret: shortSecret,
+      });
+      assert.equal(accepted.status, 200);
+    } finally {
+      process.env.TELEGRAM_WEBHOOK_SECRET = savedSecret;
+    }
+
+    await resetWebhookIngestForTests();
+    for (let i = 0; i < 120; i += 1) assert.equal(await takeWebhookInsert(), true);
+    const beforeLimit = await sql("select count(*)::int as n from messages");
+    const limitedPost = await post(groupMessage({ update_id: 901, message: { message_id: 901, text: "overflow" } }));
+    assert.equal(limitedPost.status, 429);
+    assert.equal(limitedPost.text.includes("overflow"), false);
+    const afterLimit = await sql("select count(*)::int as n from messages");
+    assert.equal(Number(afterLimit[0].n), Number(beforeLimit[0].n));
+    await resetWebhookIngestForTests();
 
     const dumped = JSON.stringify(rows);
     assert.equal(dumped.includes("file-secret-id"), false);

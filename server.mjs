@@ -1,10 +1,11 @@
 import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
+import { authFailureBlocked, clientKey, recordAuthFailure } from "./src/auth-limit.mjs";
 import { prepareDatabase } from "./src/db.mjs";
-import { insertMessage, listMessages, takeInboxRead } from "./src/messages.mjs";
+import { insertMessage, listMessages, takeInboxRead, takeWebhookInsert } from "./src/messages.mjs";
 import { toRecord } from "./src/record.mjs";
 import { ensureRegistered } from "./src/register.mjs";
-import { botToken, inboxAuthorized, responseLeaksSecret, webhookAuthorized, webhookSecret } from "./src/secret.mjs";
+import { botToken, inboxAuthorized, inboxDiagnostics, responseLeaksSecret, webhookAuthorized, webhookSecret, webhookSecretShorterThan16 } from "./src/secret.mjs";
 
 const BODY_LIMIT = 1_048_576;
 
@@ -81,13 +82,26 @@ function sendJson(res, status, body) {
   res.end(payload);
 }
 
-async function dispatch({ method, path, searchParams, secretHeader, inboxKey, authorization, readRequestBody }) {
+async function dispatch({ method, path, searchParams, secretHeader, inboxKey, authorization, forwardedFor, readRequestBody }) {
   if (method === "GET" && path === "/health") {
-    return { status: 200, body: { ok: true } };
+    return {
+      status: 200,
+      body: {
+        ok: true,
+        ...inboxDiagnostics(),
+        webhookSecretShorterThan16: webhookSecretShorterThan16(),
+      },
+    };
   }
 
+  const client = clientKey(forwardedFor);
+
   if (method === "GET" && path === "/inbox") {
-    if (!inboxAuthorized(inboxKey, authorization)) return { status: 404, body: { ok: false } };
+    if (authFailureBlocked("inbox", client)) return { status: 404, body: { ok: false } };
+    if (!inboxAuthorized(inboxKey, authorization)) {
+      recordAuthFailure("inbox", client);
+      return { status: 404, body: { ok: false } };
+    }
     const allowed = await takeInboxRead().catch((err) => {
       const code = err && typeof err.code === "string" ? err.code : "error";
       console.error(`inbox limit failed ${code}`);
@@ -111,7 +125,11 @@ async function dispatch({ method, path, searchParams, secretHeader, inboxKey, au
 
   if (path !== "/telegram") return { status: 404, body: { ok: false } };
   if (method !== "POST") return { status: 405, body: { ok: false } };
+  if (authFailureBlocked("webhook", client)) {
+    return { status: 401, body: { ok: false } };
+  }
   if (!webhookAuthorized(secretHeader)) {
+    recordAuthFailure("webhook", client);
     console.error("webhook rejected");
     return { status: 401, body: { ok: false } };
   }
@@ -140,6 +158,13 @@ async function dispatch({ method, path, searchParams, secretHeader, inboxKey, au
   const record = toRecord(update);
   if (!record) return { status: 200, body: { ok: true } };
 
+  const accepted = await takeWebhookInsert().catch((err) => {
+    const code = err && typeof err.code === "string" ? err.code : "error";
+    console.error(`webhook ingest limit failed ${code}`);
+    return false;
+  });
+  if (!accepted) return { status: 429, body: { ok: false } };
+
   try {
     await insertMessage(record);
   } catch (err) {
@@ -160,6 +185,7 @@ export async function handle(req, res) {
       secretHeader: req.headers["x-telegram-bot-api-secret-token"],
       inboxKey: req.headers["x-inbox-key"],
       authorization: req.headers.authorization,
+      forwardedFor: req.headers["x-forwarded-for"],
       readRequestBody: () => readBody(req),
     });
     sendJson(res, result.status, result.body);
@@ -194,6 +220,7 @@ export async function fetch(request) {
     secretHeader: request.headers.get("x-telegram-bot-api-secret-token"),
     inboxKey: request.headers.get("x-inbox-key"),
     authorization: request.headers.get("authorization"),
+    forwardedFor: request.headers.get("x-forwarded-for"),
     readRequestBody: async () => {
       const raw = Buffer.from(await request.arrayBuffer());
       if (raw.length > BODY_LIMIT) {

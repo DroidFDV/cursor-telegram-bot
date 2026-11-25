@@ -6,7 +6,7 @@ Node HTTP app that receives Telegram webhook updates and stores group messages. 
 
 | Method | Path | Behavior |
 | --- | --- | --- |
-| `GET` | `/health` | Returns `{"ok":true}`. No secrets, key length, message text, username, chat title, chat id, message counts, or webhook detail. |
+| `GET` | `/health` | Returns `{"ok":true}` plus `inboxTrimmedLength`, `inboxStartsWithKeyEq`, `inboxQuoteWrapped`, `inboxLengthAfterQuoteStrip`, and `webhookSecretShorterThan16`. No key characters, hash, message text, counts, or Telegram errors. |
 | `GET` | `/inbox` | Returns stored messages when `x-inbox-key` or `Authorization: Bearer` matches `INBOX_READ_KEY` after trim. A single leading `key=` on the environment value is ignored. Otherwise 404. The key is not read from the query string. Authorized reads are limited to about 30 per minute. Each item has `id`, `receivedAt`, `chatTitle`, `username`, and `text`. Optional `after` returns only newer ids. No bot token, webhook secret, or chat id. |
 | `POST` | `/telegram` | Telegram webhook. Requires header `X-Telegram-Bot-Api-Secret-Token` to match `TELEGRAM_WEBHOOK_SECRET`. A missing or wrong secret is rejected. A matching request is acknowledged with HTTP 200. |
 
